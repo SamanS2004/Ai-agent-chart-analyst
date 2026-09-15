@@ -117,8 +117,37 @@ Get live alerts the moment price touches, retests, or disrespects a zone:
 python run_agent.py alerts
 ```
 
+Watch it happen visually — a live-updating candlestick chart in your browser:
+
+```bash
+python run_agent.py app
+```
+
 Common flags (available on all subcommands): `--symbol`, `--interval`,
 `--category` (Bybit product type, default `linear`), `--journal-dir`.
+
+## Live chart app (`app` command)
+
+Opens a local web page with a real-time candlestick chart: FVG and
+order-block zones drawn to scale, the current trade plan overlaid (entry,
+stop, targets, with the reward-to-risk ratio called out), and a live alert
+feed — all updating as price moves, no manual refresh.
+
+```bash
+python run_agent.py app                     # http://127.0.0.1:8080
+python run_agent.py app --port 9000
+python run_agent.py --data-source twelvedata --twelvedata-api-key <key> app
+```
+
+This runs entirely on your own machine — there's no cloud dashboard or
+third-party page involved, so it needs real network access to your chosen
+data source just like `once`/`loop`/`alerts` do. Mechanically: a background
+thread keeps the price/zones updated (same `fetch_and_detect` pipeline as
+every other command, plus a `ZoneAlertEngine` for the live alert feed) and
+pushes each change to your browser over Server-Sent Events; the page itself
+is a small static HTML/JS file served from `trading_agent/live_app.py`, no
+external JS framework. `--price-source`, `--recompute-seconds`, and
+`--proximity-pct` work the same as on `alerts`.
 
 ## Live alerts (`alerts` command)
 
@@ -261,9 +290,10 @@ trading_agent/
   session.py      6-9am Pacific window logic (DST-aware)
   journal.py      JSONL trade journal
   report.py       renders the journal into a self-contained HTML dashboard
-  agent.py        orchestrates one cycle, a session loop, or live alerting
+  live_app.py     local live web app (real-time chart, SSE, stdlib HTTP server)
+  agent.py        orchestrates one cycle, a session loop, live alerting, or the live app
   tv_webhook.py   optional TradingView alert webhook receiver
-  cli.py          `once` / `loop` / `alerts` / `report` / `webhook` commands
+  cli.py          `once` / `loop` / `alerts` / `app` / `report` / `webhook` commands
 tests/            unit tests (FVG/OB detection, strategy, alerts, session, Bybit client parsing)
 ```
 
