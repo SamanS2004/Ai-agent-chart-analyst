@@ -3,9 +3,18 @@ import threading
 import time
 import urllib.request
 
+import pytest
+
 from trading_agent.agent import TradingAgent
 from trading_agent.journal import TradeJournal
-from trading_agent.live_app import AppState, Broadcaster, _ChartHTTPServer, _Handler, run_live_app
+from trading_agent.live_app import (
+    AppState,
+    Broadcaster,
+    _ChartHTTPServer,
+    _Handler,
+    run_live_app,
+    serve,
+)
 from trading_agent.models import Candle
 
 
@@ -141,6 +150,58 @@ def test_run_live_app_rest_mode_seeds_state_and_publishes(tmp_path):
     stop_event.set()
 
     assert price_event is not None
+
+
+def test_serve_calls_on_ready_only_after_successful_seed(tmp_path, monkeypatch):
+    # Regression test: the CLI's "open it in your browser" message must not
+    # print before the server can actually accept connections, or a startup
+    # failure gets masked behind a misleading success message.
+    client = FakeClient(_bullish_fvg_candles(), prices=[])
+    journal = TradeJournal(tmp_path)
+    agent = TradingAgent(client=client, journal=journal, symbol="BTCUSDT", interval=15)
+
+    monkeypatch.setattr(_ChartHTTPServer, "serve_forever", lambda self: None)
+    monkeypatch.setattr(_ChartHTTPServer, "server_close", lambda self: None)
+
+    ready_calls = []
+    serve(
+        agent,
+        host="127.0.0.1",
+        port=0,
+        price_source="rest",
+        recompute_seconds=9999,
+        price_poll_seconds=9999,
+        proximity_pct=0,
+        on_ready=lambda: ready_calls.append(True),
+    )
+
+    assert ready_calls == [True]
+
+
+def test_serve_does_not_call_on_ready_when_initial_fetch_fails(tmp_path):
+    class BrokenClient:
+        symbol = "BTCUSDT"
+
+        def get_klines(self, **kwargs):
+            raise ConnectionError("no network")
+
+        def get_ticker_price(self, **kwargs):
+            raise ConnectionError("no network")
+
+    journal = TradeJournal(tmp_path)
+    agent = TradingAgent(client=BrokenClient(), journal=journal, symbol="BTCUSDT", interval=15)
+
+    ready_calls = []
+    with pytest.raises(ConnectionError):
+        serve(
+            agent,
+            host="127.0.0.1",
+            port=0,
+            price_source="rest",
+            on_ready=lambda: ready_calls.append(True),
+        )
+
+    assert ready_calls == []
 
 
 def test_http_server_serves_state_and_events(tmp_path):

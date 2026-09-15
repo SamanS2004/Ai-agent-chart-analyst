@@ -20,7 +20,7 @@ import queue
 import threading
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Literal
+from typing import Callable, Literal
 
 from .agent import TradingAgent
 from .alerts import ZoneAlertEngine, filter_zones_near_price, zone_specs_from_detections
@@ -249,7 +249,12 @@ def serve(
     recompute_seconds: int = 60,
     price_poll_seconds: int = 3,
     proximity_pct: float = 0.05,
+    on_ready: Callable[[], None] | None = None,
 ) -> None:
+    """`on_ready` fires only after the initial data fetch succeeds and the
+    HTTP server is about to start listening -- so a caller's "open your
+    browser now" message can't print ahead of a startup failure (e.g. no
+    network access to the data source) and end up misleading the user."""
     state = AppState()
     broadcaster = Broadcaster()
     run_live_app(
@@ -262,6 +267,8 @@ def serve(
         proximity_pct=proximity_pct,
     )
     server = _ChartHTTPServer((host, port), _Handler, state, broadcaster)
+    if on_ready is not None:
+        on_ready()
     try:
         server.serve_forever()
     finally:

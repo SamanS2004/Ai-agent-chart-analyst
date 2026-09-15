@@ -119,10 +119,13 @@ def cmd_app(args: argparse.Namespace) -> int:
     agent = _build_agent(args)
     price_source = args.price_source or ("ws" if args.data_source == "bybit" else "rest")
     url = f"http://{args.host}:{args.port}"
-    print(
-        f"Live chart for {agent.symbol} {agent.interval}m ({args.data_source}, {price_source} feed) "
-        f"at {url} -- open it in your browser. Ctrl+C to stop."
-    )
+
+    def announce_ready() -> None:
+        print(
+            f"Live chart for {agent.symbol} {agent.interval}m ({args.data_source}, {price_source} feed) "
+            f"at {url} -- open it in your browser. Ctrl+C to stop."
+        )
+
     try:
         serve_live_app(
             agent,
@@ -132,9 +135,19 @@ def cmd_app(args: argparse.Namespace) -> int:
             recompute_seconds=args.recompute_seconds,
             price_poll_seconds=args.price_poll_seconds,
             proximity_pct=args.proximity_pct,
+            on_ready=announce_ready,
         )
     except KeyboardInterrupt:
         print("\nStopped.")
+    except Exception as exc:
+        print(
+            f"Could not start the live chart: {exc}\n"
+            f"Most likely cause: no network access to your data source "
+            f"(--data-source {args.data_source}) from this machine. Check your connection, "
+            f"or try --data-source twelvedata with a valid --twelvedata-api-key.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
