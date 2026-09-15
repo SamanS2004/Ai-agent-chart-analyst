@@ -132,6 +132,17 @@ with irrelevant alerts.
   dataclass as JSON (`event`, `kind`, `label`, `top`, `bottom`, `price`,
   `timestamp_ms`, `message`).
 
+## Dashboard (`report` command)
+
+Renders the local journal into a single self-contained HTML file — price
+chart, trade idea ledger, and the alert tape — no network or server needed,
+just open it in a browser:
+
+```bash
+python run_agent.py report                              # writes data/dashboard.html
+python run_agent.py report --output today.html --start 2026-09-15 --end 2026-09-15
+```
+
 ## Journal output
 
 Each cycle appends a JSON line to `data/journal/<YYYY-MM-DD>.jsonl` with
@@ -151,9 +162,10 @@ trading_agent/
   alert_sinks.py  console/journal/desktop-notification/webhook delivery
   session.py      6-9am Pacific window logic (DST-aware)
   journal.py      JSONL trade journal
+  report.py       renders the journal into a self-contained HTML dashboard
   agent.py        orchestrates one cycle, a session loop, or live alerting
   tv_webhook.py   optional TradingView alert webhook receiver
-  cli.py          `once` / `loop` / `alerts` / `webhook` commands
+  cli.py          `once` / `loop` / `alerts` / `report` / `webhook` commands
 tests/            unit tests (FVG/OB detection, strategy, alerts, session, Bybit client parsing)
 ```
 

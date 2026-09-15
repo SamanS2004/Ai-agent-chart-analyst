@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
+from pathlib import Path
 
 from .agent import TradingAgent, format_report
 from .alert_sinks import combine, console_sink, desktop_notification_sink, journal_sink, webhook_sink
 from .bybit_client import BybitClient
 from .journal import TradeJournal
+from .report import load_journal_records, render_dashboard_html
 from .tv_webhook import journal_payload_handler, serve
 
 
@@ -68,6 +71,18 @@ def cmd_alerts(args: argparse.Namespace) -> int:
         )
     except KeyboardInterrupt:
         print("\nStopped.")
+    return 0
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    start = date.fromisoformat(args.start) if args.start else None
+    end = date.fromisoformat(args.end) if args.end else None
+    records = load_journal_records(Path(args.journal_dir), start=start, end=end)
+    html_doc = render_dashboard_html(records, symbol=args.symbol)
+
+    output_path = Path(args.output)
+    output_path.write_text(html_doc, encoding="utf-8")
+    print(f"Wrote dashboard ({len(records)} journal records) to {output_path}")
     return 0
 
 
@@ -136,6 +151,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     alerts.add_argument("--alert-webhook-secret", default=None)
     alerts.set_defaults(func=cmd_alerts)
+
+    report = subparsers.add_parser(
+        "report", help="Render the local journal into a self-contained HTML dashboard"
+    )
+    report.add_argument("--output", default="data/dashboard.html")
+    report.add_argument("--start", default=None, help="YYYY-MM-DD, inclusive")
+    report.add_argument("--end", default=None, help="YYYY-MM-DD, inclusive")
+    report.set_defaults(func=cmd_report)
 
     webhook = subparsers.add_parser(
         "webhook", help="Start a server to receive TradingView alert webhooks"

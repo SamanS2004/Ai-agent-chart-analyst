@@ -23,7 +23,7 @@ def console_sink(alert: Alert) -> None:
 
 def journal_sink(journal: TradeJournal) -> AlertSink:
     def sink(alert: Alert) -> None:
-        journal.log_event(f"ALERT[{alert.event}] {alert.message}")
+        journal.log_alert(alert)
 
     return sink
 
