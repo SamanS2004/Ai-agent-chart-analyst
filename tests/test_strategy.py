@@ -27,7 +27,9 @@ def test_long_idea_from_confluence_zone():
 def test_short_idea_from_single_fvg_when_no_confluence():
     candles = [candle(0, 100, 101, 99, 100.5), candle(1, 100, 101, 99, 98)]
     price = candles[-1].close  # 98
-    fvg = FairValueGap(kind="bearish", top=100, bottom=99, index=0, timestamp_ms=0)
+    # top/bottom placed above the range's equilibrium (100) so this bearish
+    # gap sits in premium, as required for it to be a valid candidate.
+    fvg = FairValueGap(kind="bearish", top=102, bottom=101, index=0, timestamp_ms=0)
 
     idea = generate_trade_idea(candles, [fvg], [], [])
 

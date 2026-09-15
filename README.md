@@ -63,6 +63,9 @@ writing one small class with those same two methods — see
 - When price is approaching an unmitigated zone, it computes a trade idea:
   entry at the zone edge, stop beyond the zone, targets at 2R/3R, plus a
   plain-English rationale.
+- FVGs that formed back to back during one strong push are treated as one
+  continuous imbalance, not separate opportunities — see "Stacked FVGs"
+  below for how the single priority zone is chosen.
 - Writes everything to a daily JSONL journal under `data/journal/`.
 - **It does not place real orders.** There are no exchange API keys, no
   order-execution code, and no live-trading path in this repo. It's an
@@ -74,6 +77,35 @@ writing one small class with those same two methods — see
 - This is not financial advice; FVG/order-block heuristics are a
   simplified, from-scratch interpretation of common ICT-style concepts,
   not a guaranteed-profitable strategy.
+
+## Stacked FVGs (`stacking.py`)
+
+When several FVGs form back to back during one strong push, they're grouped
+into one stack and only a single zone from it is ever offered as a trade
+idea — never every gap in the stack independently. Priority within a stack:
+
+1. **Discount/premium (hard filter).** A bullish FVG only counts if its
+   midpoint sits in the lower half of the recent candle range (discount); a
+   bearish one only in the upper half (premium). Fails this → dropped
+   entirely, even if otherwise valid.
+2. **Structurally nearest gap first.** The last gap formed during the push
+   (highest top for a bullish stack, lowest bottom for a bearish one) is
+   the first one price reaches on a retracement — that's the one to react
+   at. If price has already traded through it, **the whole stack is
+   disqualified that cycle**, not just that one gap — since each analysis
+   cycle recomputes from scratch with no memory of "already tried and
+   failed," this is what actually stops the tool from chasing a "better"
+   fill deeper in the stack once the front of it has already failed.
+3. **Order-block confluence beats plain imbalance**, but only among gaps
+   still live per (2): if one of them overlaps a valid order block, that
+   nearest *confluence* gap is nominated instead of the plain nearest one.
+
+A gap's width relative to others in the same stack is reported (used in
+the rationale, e.g. "the widest one in it") rather than used to override
+the nearest-price pick — once discount/premium and confluence have already
+picked a winner, folding in a third, differently-scaled criterion (price
+distance vs. gap width) would make the result depend on arbitrary
+weighting between them.
 
 ## Setup
 
@@ -285,7 +317,8 @@ trading_agent/
   bybit_client.py      public Bybit v5 kline/ticker fetcher (default data source)
   twelvedata_client.py Twelve Data REST kline/ticker fetcher (alternative data source)
   smc.py          FVG / order block / confluence-zone detection
-  strategy.py     turns detected zones into a single trade idea
+  stacking.py     groups back-to-back same-direction FVGs, picks the one priority zone
+  strategy.py     turns detected/stacked zones into a single trade idea
   alerts.py       touch/retest/disrespect state machine + proximity filtering
   live_stream.py  Bybit public WebSocket ticker feed
   alert_sinks.py  console/journal/desktop-notification/webhook delivery

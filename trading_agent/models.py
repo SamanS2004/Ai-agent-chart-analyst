@@ -70,6 +70,21 @@ class ConfluenceZone:
 
 
 @dataclass
+class PriorityZone:
+    """The single zone selected to represent a stack of same-direction FVGs
+    that formed back to back (one continuous imbalance, not separate
+    opportunities) -- see stacking.py."""
+
+    kind: Kind
+    top: float
+    bottom: float
+    stack_size: int
+    has_confluence: bool
+    is_widest_in_stack: bool
+    order_block: Optional[OrderBlock] = None
+
+
+@dataclass
 class TradeIdea:
     kind: Literal["long", "short"]
     entry: float
