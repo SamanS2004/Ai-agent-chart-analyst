@@ -84,8 +84,53 @@ Then in TradingView, create an alert with webhook URL
 `http://<host>:8765` and, if you set `--secret`, add header
 `X-Webhook-Secret: <your-shared-secret>`.
 
+Get live alerts the moment price touches, retests, or disrespects a zone:
+
+```bash
+python run_agent.py alerts
+```
+
 Common flags (available on all subcommands): `--symbol`, `--interval`,
 `--category` (Bybit product type, default `linear`), `--journal-dir`.
+
+## Live alerts (`alerts` command)
+
+Watches price in real time against every FVG/order-block zone and fires an
+alert the instant one of these happens:
+
+- **touch** — price first trades into an unmitigated zone.
+- **retest** — price touches the same zone again after having left it (the
+  zone held in between).
+- **disrespect** — price breaks through the far edge of the zone (not just
+  a wick — beyond a small buffer), meaning it failed as support/resistance.
+  Once a zone is disrespected it's retired and won't alert again.
+
+```bash
+python run_agent.py alerts                          # WebSocket price feed (default, lowest latency)
+python run_agent.py alerts --price-source rest       # REST ticker polling instead (every 5s by default)
+python run_agent.py alerts --always-on               # monitor around the clock, not just 6-9am Pacific
+python run_agent.py alerts --proximity-pct 0.02       # only track zones within 2% of price (default 5%)
+```
+
+By default zones are recomputed from fresh candles every 60s
+(`--recompute-seconds`), and only zones within 5% of the current price are
+tracked (`--proximity-pct`) — with a multi-day candle window there can be
+dozens of old, far-away zones, and without this filter they'd flood you
+with irrelevant alerts.
+
+**Where the alert goes:**
+- Always: printed to the terminal (with a bell) and logged to the journal.
+- `--desktop-notify`: best-effort native OS notification (macOS/Linux/Windows).
+- `--alert-webhook-url <url>`: POSTs the alert as JSON to any URL you give
+  it. The easiest way to get it on your phone with zero setup is
+  [ntfy.sh](https://ntfy.sh) — pick a topic name and pass
+  `--alert-webhook-url https://ntfy.sh/<your-topic>` (note ntfy expects
+  plain text, not JSON, as its body, so for ntfy specifically pipe alerts
+  through a small relay, or just watch the terminal/desktop notification).
+  For Discord/Slack, point it at an incoming-webhook relay that reshapes
+  the JSON, or write your own tiny receiver — the payload is the `Alert`
+  dataclass as JSON (`event`, `kind`, `label`, `top`, `bottom`, `price`,
+  `timestamp_ms`, `message`).
 
 ## Journal output
 
@@ -98,15 +143,18 @@ trade idea (if any) — entry, stop, targets, confidence, and rationale.
 ```
 trading_agent/
   models.py       dataclasses: Candle, FairValueGap, OrderBlock, TradeIdea, ...
-  bybit_client.py public Bybit v5 kline fetcher
+  bybit_client.py public Bybit v5 kline/ticker fetcher
   smc.py          FVG / order block / confluence-zone detection
   strategy.py     turns detected zones into a single trade idea
+  alerts.py       touch/retest/disrespect state machine + proximity filtering
+  live_stream.py  Bybit public WebSocket ticker feed
+  alert_sinks.py  console/journal/desktop-notification/webhook delivery
   session.py      6-9am Pacific window logic (DST-aware)
   journal.py      JSONL trade journal
-  agent.py        orchestrates one cycle, or a full session loop
+  agent.py        orchestrates one cycle, a session loop, or live alerting
   tv_webhook.py   optional TradingView alert webhook receiver
-  cli.py          `once` / `loop` / `webhook` commands
-tests/            unit tests (FVG/OB detection, strategy, session, Bybit client parsing)
+  cli.py          `once` / `loop` / `alerts` / `webhook` commands
+tests/            unit tests (FVG/OB detection, strategy, alerts, session, Bybit client parsing)
 ```
 
 ## Tests

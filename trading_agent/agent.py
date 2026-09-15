@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import threading
 import time
-from typing import Callable
+from typing import Callable, Literal
 
+from .alerts import Alert, ZoneAlertEngine, filter_zones_near_price, zone_specs_from_detections
 from .bybit_client import BybitClient
 from .journal import TradeJournal
+from .live_stream import BybitTickerWebSocket
 from .models import AnalysisResult
 from .session import PACIFIC, is_session_active, seconds_until_next_session
 from .smc import find_confluence_zones, find_fair_value_gaps, find_order_blocks
@@ -81,6 +84,111 @@ class TradingAgent:
                     f"Outside the 6-9am Pacific session; next session in {wait:.0f}s."
                 )
                 sleep_fn(min(wait, poll_seconds))
+
+    def _refresh_zones(self, engine: ZoneAlertEngine, proximity_pct: float = 0.05) -> None:
+        candles = self.client.get_klines(
+            symbol=self.symbol,
+            interval=self.interval,
+            category=self.category,
+            limit=self.candle_limit,
+        )
+        fvgs = find_fair_value_gaps(candles)
+        order_blocks = find_order_blocks(candles)
+        specs = zone_specs_from_detections(fvgs, order_blocks)
+        specs = filter_zones_near_price(specs, candles[-1].close, proximity_pct)
+        engine.sync_zones(specs)
+
+    def run_live_alerts(
+        self,
+        on_alert: Callable[[Alert], None],
+        price_source: Literal["ws", "rest"] = "ws",
+        recompute_seconds: int = 60,
+        price_poll_seconds: int = 5,
+        tz=PACIFIC,
+        always_on: bool = False,
+        proximity_pct: float = 0.05,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        max_price_ticks: int | None = None,
+    ) -> None:
+        """Watch live price against current FVG/order-block zones and fire
+        touch/retest/disrespect alerts as they happen. Zones are recomputed
+        from fresh candles every `recompute_seconds`; by default active only
+        during the 6-9am Pacific session (set `always_on=True` to disable
+        that restriction). Only zones within `proximity_pct` of price are
+        tracked, so old, far-away history doesn't flood alerts."""
+        engine = ZoneAlertEngine()
+
+        def handle_price(price: float, timestamp_ms: int | None = None) -> None:
+            if not (always_on or is_session_active(tz=tz)):
+                return
+            for alert in engine.on_price(price, timestamp_ms):
+                on_alert(alert)
+
+        if price_source == "rest":
+            self._run_live_alerts_rest(
+                engine,
+                handle_price,
+                recompute_seconds=recompute_seconds,
+                price_poll_seconds=price_poll_seconds,
+                tz=tz,
+                always_on=always_on,
+                proximity_pct=proximity_pct,
+                sleep_fn=sleep_fn,
+                max_price_ticks=max_price_ticks,
+            )
+            return
+
+        self._refresh_zones(engine, proximity_pct=proximity_pct)
+        stop_event = threading.Event()
+
+        def recompute_loop() -> None:
+            while not stop_event.wait(recompute_seconds):
+                if always_on or is_session_active(tz=tz):
+                    try:
+                        self._refresh_zones(engine, proximity_pct=proximity_pct)
+                    except Exception as exc:  # keep monitoring even if one refresh fails
+                        self.journal.log_event(f"zone refresh error: {exc}")
+
+        recompute_thread = threading.Thread(target=recompute_loop, daemon=True)
+        recompute_thread.start()
+
+        stream = BybitTickerWebSocket(symbol=self.symbol, on_price=handle_price)
+        try:
+            stream.run_forever()
+        finally:
+            stop_event.set()
+            recompute_thread.join(timeout=5)
+
+    def _run_live_alerts_rest(
+        self,
+        engine: ZoneAlertEngine,
+        handle_price: Callable[[float, int | None], None],
+        recompute_seconds: int,
+        price_poll_seconds: int,
+        tz,
+        always_on: bool,
+        proximity_pct: float,
+        sleep_fn: Callable[[float], None],
+        max_price_ticks: int | None,
+    ) -> None:
+        elapsed_since_recompute = recompute_seconds  # force an immediate first recompute
+        ticks = 0
+        while max_price_ticks is None or ticks < max_price_ticks:
+            if always_on or is_session_active(tz=tz):
+                if elapsed_since_recompute >= recompute_seconds:
+                    try:
+                        self._refresh_zones(engine, proximity_pct=proximity_pct)
+                    except Exception as exc:
+                        self.journal.log_event(f"zone refresh error: {exc}")
+                    elapsed_since_recompute = 0
+                try:
+                    price = self.client.get_ticker_price(symbol=self.symbol, category=self.category)
+                    handle_price(price, None)
+                except Exception as exc:
+                    self.journal.log_event(f"price poll error: {exc}")
+                elapsed_since_recompute += price_poll_seconds
+            ticks += 1
+            sleep_fn(price_poll_seconds)
 
 
 def format_report(result: AnalysisResult) -> str:

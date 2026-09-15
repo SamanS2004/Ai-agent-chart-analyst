@@ -4,6 +4,7 @@ import argparse
 import sys
 
 from .agent import TradingAgent, format_report
+from .alert_sinks import combine, console_sink, desktop_notification_sink, journal_sink, webhook_sink
 from .bybit_client import BybitClient
 from .journal import TradeJournal
 from .tv_webhook import journal_payload_handler, serve
@@ -42,6 +43,34 @@ def cmd_loop(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_alerts(args: argparse.Namespace) -> int:
+    agent = _build_agent(args)
+    sinks = [console_sink, journal_sink(agent.journal)]
+    if args.desktop_notify:
+        sinks.append(desktop_notification_sink())
+    if args.alert_webhook_url:
+        sinks.append(webhook_sink(args.alert_webhook_url, secret=args.alert_webhook_secret))
+    on_alert = combine(*sinks)
+
+    session_note = "always on" if args.always_on else "active 6:00-9:00 America/Los_Angeles"
+    print(
+        f"Live-monitoring {args.symbol} {args.interval}m FVG/order-block zones "
+        f"via {args.price_source} price feed ({session_note}). Ctrl+C to stop."
+    )
+    try:
+        agent.run_live_alerts(
+            on_alert=on_alert,
+            price_source=args.price_source,
+            recompute_seconds=args.recompute_seconds,
+            price_poll_seconds=args.price_poll_seconds,
+            always_on=args.always_on,
+            proximity_pct=args.proximity_pct,
+        )
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    return 0
+
+
 def cmd_webhook(args: argparse.Namespace) -> int:
     journal = TradeJournal(args.journal_dir)
     print(f"Listening for TradingView alert webhooks on {args.host}:{args.port}")
@@ -73,6 +102,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     loop.add_argument("--poll-seconds", type=int, default=900)
     loop.set_defaults(func=cmd_loop)
+
+    alerts = subparsers.add_parser(
+        "alerts",
+        help="Live-monitor price against FVG/order-block zones; alert on touch/retest/disrespect",
+    )
+    alerts.add_argument("--price-source", choices=["ws", "rest"], default="ws")
+    alerts.add_argument(
+        "--recompute-seconds", type=int, default=60, help="How often to refresh zones from klines"
+    )
+    alerts.add_argument(
+        "--price-poll-seconds",
+        type=int,
+        default=5,
+        help="Ticker poll interval when --price-source=rest",
+    )
+    alerts.add_argument(
+        "--always-on",
+        action="store_true",
+        help="Monitor around the clock instead of only 6-9am Pacific",
+    )
+    alerts.add_argument(
+        "--proximity-pct",
+        type=float,
+        default=0.05,
+        help="Only track zones within this fraction of price (0.05 = 5%%); 0 disables filtering",
+    )
+    alerts.add_argument("--desktop-notify", action="store_true", help="Best-effort OS notification")
+    alerts.add_argument(
+        "--alert-webhook-url",
+        default=None,
+        help="POST each alert as JSON here (e.g. an ntfy.sh topic URL or your own relay)",
+    )
+    alerts.add_argument("--alert-webhook-secret", default=None)
+    alerts.set_defaults(func=cmd_alerts)
 
     webhook = subparsers.add_parser(
         "webhook", help="Start a server to receive TradingView alert webhooks"

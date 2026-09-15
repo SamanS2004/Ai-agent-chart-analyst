@@ -69,3 +69,20 @@ class BybitClient:
         ]
         candles.reverse()  # Bybit returns newest-first
         return candles
+
+    def get_ticker_price(self, symbol: str = "BTCUSDT", category: str = "linear") -> float:
+        """Last traded price, for REST-polling-based live monitoring."""
+        params = {"category": category, "symbol": symbol}
+        response = self._session.get(
+            f"{self.base_url}/v5/market/tickers", params=params, timeout=self.timeout
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        if payload.get("retCode") != 0:
+            raise BybitAPIError(payload.get("retMsg", "unknown Bybit API error"))
+
+        rows = payload["result"]["list"]
+        if not rows:
+            raise BybitAPIError(f"no ticker data for {symbol}")
+        return float(rows[0]["lastPrice"])
