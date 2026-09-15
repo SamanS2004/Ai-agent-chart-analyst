@@ -88,7 +88,7 @@ class TradeIdea:
 @dataclass
 class AnalysisResult:
     symbol: str
-    interval: str
+    interval: int
     timestamp_ms: int
     last_price: float
     fair_value_gaps: list[FairValueGap] = field(default_factory=list)

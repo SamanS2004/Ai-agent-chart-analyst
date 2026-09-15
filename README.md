@@ -5,16 +5,15 @@ Pacific session, looks for **fair value gaps (FVGs)** and **order blocks
 (OBs)**, and journals a trade idea (entry / stop / targets / rationale)
 whenever price sets up at an unmitigated zone.
 
-## Data source: why Bybit instead of TradingView
+## Data source: why Bybit instead of TradingView (and it doesn't have to be Bybit)
 
 TradingView does not offer a public, headless API for pulling historical
 OHLC candles into third-party code. Its "Advanced Charts" library is an
 embeddable UI widget (for displaying charts inside your own app), and real
 programmatic market-data access requires becoming an approved
 broker/exchange integration — there's no free REST endpoint a script can
-just call. So, per the fallback you described, this agent pulls candles
-directly from **Bybit's public v5 market-data API**, which is free and
-requires no account or API key for market data:
+just call. So the default here is **Bybit's public v5 market-data API**,
+which is free and requires no account or API key:
 
 ```
 GET https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=15
@@ -26,9 +25,36 @@ this agent's built-in webhook receiver (`trading-agent webhook`) — see
 below. That gets you TradingView's alert engine feeding the same journal,
 without needing a data API that doesn't exist for regular accounts.
 
+**Bybit isn't required, though.** Every command takes `--data-source`, and
+the client TradingAgent talks to is a small interface
+(`get_klines(limit)` / `get_ticker_price()`) — swap the source without
+touching the detection logic at all:
+
+```bash
+python run_agent.py --data-source bybit once        # default, no API key
+python run_agent.py --data-source twelvedata once    # needs an API key, see below
+```
+
+**Twelve Data** (`trading_agent/twelvedata_client.py`) is the built-in
+alternative — a plain REST client, independent of any exchange, that works
+anywhere with normal internet access (unlike this repo's own sandboxed dev
+session, which blocks outbound requests to *every* external host, Bybit
+included — that's what prompted adding a second source). Get a free key at
+[twelvedata.com](https://twelvedata.com) and either pass
+`--twelvedata-api-key` or set `TWELVEDATA_API_KEY`. Its default symbol is
+`BTC/USD` (vs. Bybit's `BTCUSDT`) — override with `--symbol` if needed.
+Live `alerts` monitoring falls back to REST ticker polling automatically
+for non-Bybit sources, since Twelve Data's free tier has no public
+WebSocket here; pass `--price-source rest` explicitly if you want to be
+sure.
+
+Adding another source (Coinbase, Kraken, whatever you can reach) means
+writing one small class with those same two methods — see
+`bybit_client.py` or `twelvedata_client.py` for the shape.
+
 ## What it actually does (and doesn't do)
 
-- Fetches recent 15m BTCUSDT candles from Bybit.
+- Fetches recent 15m BTC candles from Bybit (default) or another configured source.
 - Detects fair value gaps (3-candle imbalances) and order blocks (last
   opposite-colour candle before a break of market structure), tracking
   whether each has since been mitigated (price traded back through it).
@@ -53,10 +79,11 @@ without needing a data API that doesn't exist for regular accounts.
 pip install -r requirements.txt
 ```
 
-Requires network access to `api.bybit.com`. (Note: some sandboxed/CI
-environments block outbound requests to arbitrary hosts by policy — if
-`trading-agent once` can't reach Bybit, run it somewhere with normal
-outbound HTTPS access, e.g. your own machine.)
+Requires network access to whichever data source you use (`api.bybit.com`
+by default, `api.twelvedata.com` for `--data-source twelvedata`). Some
+sandboxed/CI environments block outbound requests to *any* external host
+by policy — if a command can't reach its data source, run it somewhere
+with normal outbound HTTPS access, e.g. your own machine.
 
 ## Usage
 
@@ -224,7 +251,8 @@ trade idea (if any) — entry, stop, targets, confidence, and rationale.
 ```
 trading_agent/
   models.py       dataclasses: Candle, FairValueGap, OrderBlock, TradeIdea, ...
-  bybit_client.py public Bybit v5 kline/ticker fetcher
+  bybit_client.py      public Bybit v5 kline/ticker fetcher (default data source)
+  twelvedata_client.py Twelve Data REST kline/ticker fetcher (alternative data source)
   smc.py          FVG / order block / confluence-zone detection
   strategy.py     turns detected zones into a single trade idea
   alerts.py       touch/retest/disrespect state machine + proximity filtering

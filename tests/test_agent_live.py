@@ -1,3 +1,5 @@
+import pytest
+
 from trading_agent.agent import TradingAgent
 from trading_agent.journal import TradeJournal
 from trading_agent.models import Candle
@@ -68,3 +70,12 @@ def test_rest_mode_skips_work_outside_session_window(tmp_path, monkeypatch):
 
     assert collected == []
     assert client.prices == prices  # ticker was never even polled
+
+
+def test_ws_mode_rejected_for_non_bybit_client(tmp_path):
+    client = FakeClient(_bullish_fvg_candles(), prices=[])
+    journal = TradeJournal(tmp_path)
+    agent = TradingAgent(client=client, journal=journal)
+
+    with pytest.raises(ValueError, match="ws"):
+        agent.run_live_alerts(on_alert=lambda a: None, price_source="ws")
