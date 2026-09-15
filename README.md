@@ -143,6 +143,76 @@ python run_agent.py report                              # writes data/dashboard.
 python run_agent.py report --output today.html --start 2026-09-15 --end 2026-09-15
 ```
 
+## Running it every day (your own machine)
+
+This has to run somewhere with real outbound access to `api.bybit.com` —
+sandboxed dev/CI environments often block that by policy. Run it on your
+own machine, a VPS, or any host with normal internet access.
+
+`trading-agent loop` and `trading-agent alerts` already gate themselves to
+the 6-9am Pacific window internally (DST-aware), so the simplest setup is
+just: keep the process running continuously, and it idles itself outside
+the session. Pick whichever fits your OS:
+
+**macOS (launchd)** — save as `~/Library/LaunchAgents/com.you.trading-agent.plist`,
+substituting your repo path, then `launchctl load` it:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.you.trading-agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/path/to/Ai-agent-chart-analyst/run_agent.py</string>
+    <string>loop</string>
+  </array>
+  <key>WorkingDirectory</key><string>/path/to/Ai-agent-chart-analyst</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/trading-agent.log</string>
+  <key>StandardErrorPath</key><string>/tmp/trading-agent-error.log</string>
+</dict>
+</plist>
+```
+
+**Linux (systemd --user)** — save as `~/.config/systemd/user/trading-agent.service`:
+
+```ini
+[Unit]
+Description=BTC FVG/order-block trading agent
+
+[Service]
+WorkingDirectory=/path/to/Ai-agent-chart-analyst
+ExecStart=/usr/bin/python3 run_agent.py loop
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+```
+
+Then: `systemctl --user enable --now trading-agent.service`
+
+**Either OS, simpler but less robust** — just run `trading-agent loop` (or
+`alerts`) in a `tmux`/`screen` session and leave it attached.
+
+**Daily dashboard** — generate a fresh `report` once the session closes.
+Cron understands `CRON_TZ` (Linux; on macOS use `TZ=` and adjust for UTC
+manually, since launchd's calendar trigger has no timezone support beyond
+the system clock):
+
+```cron
+CRON_TZ=America/Los_Angeles
+5 9 * * * cd /path/to/Ai-agent-chart-analyst && /usr/bin/python3 run_agent.py report --output "data/dashboard-$(date +\%F).html"
+```
+
+**Windows** — Task Scheduler, action `python.exe run_agent.py loop`,
+trigger "At log on" with "Repeat task" disabled (`loop` runs forever on
+its own).
+
 ## Journal output
 
 Each cycle appends a JSON line to `data/journal/<YYYY-MM-DD>.jsonl` with
