@@ -246,4 +246,9 @@ python -m pytest
 ```
 
 All detection/strategy/session/client-parsing logic is covered with
-synthetic data, so the suite runs with no network access.
+synthetic data, so the suite runs with no network access. There's also a
+regression fixture (`tests/fixtures/btc_15m_2026-09-13_to_15.csv`) captured
+from a real BTC/USD 15m feed, validated against the detection pipeline and
+spot-checked candle-by-candle against each zone's own definition -- this
+catches edge cases (real precision, real volatility clustering) that
+hand-built synthetic candles tend not to.
