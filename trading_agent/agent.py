@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import queue
 import threading
 import time
 from typing import Callable, Literal
@@ -152,12 +153,40 @@ class TradingAgent:
         recompute_thread = threading.Thread(target=recompute_loop, daemon=True)
         recompute_thread.start()
 
-        stream = BybitTickerWebSocket(symbol=self.symbol, on_price=handle_price)
+        # Alert delivery (webhook POSTs, subprocess desktop notifications, ...)
+        # can each take seconds; running it inline on the WebSocket's message
+        # thread risks missing pings and getting disconnected. Hand alerts off
+        # to a separate worker thread instead.
+        alert_queue: queue.Queue[Alert | None] = queue.Queue()
+
+        def ws_handle_price(price: float, timestamp_ms: int | None = None) -> None:
+            if not (always_on or is_session_active(tz=tz)):
+                return
+            for alert in engine.on_price(price, timestamp_ms):
+                alert_queue.put(alert)
+
+        def dispatch_loop() -> None:
+            while True:
+                alert = alert_queue.get()
+                if alert is None:
+                    return
+                on_alert(alert)
+
+        dispatch_thread = threading.Thread(target=dispatch_loop, daemon=True)
+        dispatch_thread.start()
+
+        stream = BybitTickerWebSocket(
+            symbol=self.symbol,
+            on_price=ws_handle_price,
+            on_status=lambda msg: self.journal.log_event(f"price stream: {msg}"),
+        )
         try:
             stream.run_forever()
         finally:
             stop_event.set()
             recompute_thread.join(timeout=5)
+            alert_queue.put(None)
+            dispatch_thread.join(timeout=5)
 
     def _run_live_alerts_rest(
         self,

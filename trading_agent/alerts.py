@@ -18,6 +18,7 @@ events on state transitions. It has no network code of its own.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Literal
 
@@ -107,28 +108,35 @@ def zone_specs_from_detections(
 
 
 class ZoneAlertEngine:
+    """Thread-safe: sync_zones() typically runs on a periodic recompute thread
+    while on_price() runs on the price-feed thread (see agent.run_live_alerts)."""
+
     def __init__(self, disrespect_buffer_pct: float = DEFAULT_DISRESPECT_BUFFER_PCT) -> None:
         self.disrespect_buffer_pct = disrespect_buffer_pct
         self._states: dict[tuple, _ZoneState] = {}
+        self._lock = threading.Lock()
 
     def sync_zones(self, specs: list[ZoneSpec]) -> None:
         """Register any zones not already being tracked. Never resets live state
         of a zone already known -- that would erase real-time touch history."""
-        for spec in specs:
-            if spec.key in self._states:
-                continue
-            # A zone already shown as mitigated by closed-candle history starts
-            # pre-seeded as touched once, so alerts only fire for genuinely new
-            # real-time developments rather than replaying chart history.
-            self._states[spec.key] = _ZoneState(
-                spec=spec,
-                inside=spec.already_touched,
-                touch_count=1 if spec.already_touched else 0,
-            )
+        with self._lock:
+            for spec in specs:
+                if spec.key in self._states:
+                    continue
+                # A zone already shown as mitigated by closed-candle history starts
+                # pre-seeded as touched once, so alerts only fire for genuinely new
+                # real-time developments rather than replaying chart history.
+                self._states[spec.key] = _ZoneState(
+                    spec=spec,
+                    inside=spec.already_touched,
+                    touch_count=1 if spec.already_touched else 0,
+                )
 
     def on_price(self, price: float, timestamp_ms: int | None = None) -> list[Alert]:
         alerts: list[Alert] = []
-        for state in self._states.values():
+        with self._lock:
+            states = list(self._states.values())
+        for state in states:
             alert = self._update_zone(state, price, timestamp_ms)
             if alert is not None:
                 alerts.append(alert)

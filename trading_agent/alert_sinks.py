@@ -23,7 +23,10 @@ def console_sink(alert: Alert) -> None:
 
 def journal_sink(journal: TradeJournal) -> AlertSink:
     def sink(alert: Alert) -> None:
-        journal.log_alert(alert)
+        try:
+            journal.log_alert(alert)
+        except OSError as exc:
+            print(f"[alert journal write failed] {exc}", file=sys.stderr)
 
     return sink
 
@@ -42,11 +45,22 @@ def webhook_sink(url: str, secret: str | None = None, timeout: float = 5.0) -> A
     return sink
 
 
+def _escape_applescript(text: str) -> str:
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _escape_powershell_single_quoted(text: str) -> str:
+    return text.replace("'", "''")
+
+
 def desktop_notification_sink() -> AlertSink:
     def sink(alert: Alert) -> None:
         try:
             if sys.platform == "darwin":
-                script = f'display notification "{alert.message}" with title "Trading Alert"'
+                script = (
+                    f'display notification "{_escape_applescript(alert.message)}" '
+                    'with title "Trading Alert"'
+                )
                 subprocess.run(["osascript", "-e", script], check=False, timeout=5)
             elif sys.platform.startswith("linux"):
                 subprocess.run(
@@ -55,7 +69,7 @@ def desktop_notification_sink() -> AlertSink:
             elif sys.platform == "win32":
                 ps = (
                     "New-BurntToastNotification -Text 'Trading Alert', "
-                    f"'{alert.message}'"
+                    f"'{_escape_powershell_single_quoted(alert.message)}'"
                 )
                 subprocess.run(["powershell", "-Command", ps], check=False, timeout=5)
         except (OSError, subprocess.SubprocessError):
@@ -65,8 +79,14 @@ def desktop_notification_sink() -> AlertSink:
 
 
 def combine(*sinks: AlertSink) -> AlertSink:
+    """Runs every sink even if one fails, so a broken channel never silences
+    the rest (console/journal in particular should always get the alert)."""
+
     def sink(alert: Alert) -> None:
         for one in sinks:
-            one(alert)
+            try:
+                one(alert)
+            except Exception as exc:  # a sink's own bug must not cost the others
+                print(f"[alert sink {one!r} failed] {exc}", file=sys.stderr)
 
     return sink

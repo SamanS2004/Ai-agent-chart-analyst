@@ -133,6 +133,40 @@ def test_filter_zones_near_price_disabled_when_pct_is_zero():
     assert filter_zones_near_price([far], price, proximity_pct=0) == [far]
 
 
+def test_concurrent_sync_and_on_price_do_not_race(monkeypatch):
+    # Regression test: sync_zones() (recompute thread) inserting into the
+    # engine's dict while on_price() (price-feed thread) iterates it used to
+    # raise "dictionary changed size during iteration".
+    import threading
+
+    engine = ZoneAlertEngine()
+    stop = threading.Event()
+    errors = []
+
+    def syncer():
+        i = 0
+        while not stop.is_set():
+            engine.sync_zones([bullish_zone(key=f"z{i}", top=100 + i, bottom=98 + i)])
+            i += 1
+
+    def prices():
+        try:
+            for _ in range(2000):
+                engine.on_price(100.0)
+        except RuntimeError as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=syncer)
+    t2 = threading.Thread(target=prices)
+    t1.start()
+    t2.start()
+    t2.join(timeout=10)
+    stop.set()
+    t1.join(timeout=10)
+
+    assert errors == []
+
+
 def test_zone_specs_from_detections_maps_fvgs_and_order_blocks():
     fvg = FairValueGap(kind="bullish", top=100, bottom=98, index=0, timestamp_ms=0)
     ob = OrderBlock(kind="bearish", top=105, bottom=103, index=1, timestamp_ms=0)

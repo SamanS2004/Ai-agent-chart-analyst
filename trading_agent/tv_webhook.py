@@ -9,6 +9,7 @@ this agent's journal. Point the alert's webhook URL at this server.
 
 from __future__ import annotations
 
+import hmac
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Callable
@@ -26,7 +27,7 @@ def _make_handler(on_payload: PayloadHandler, secret: str | None) -> type[BaseHT
 
             if secret is not None:
                 provided = self.headers.get("X-Webhook-Secret", "")
-                if provided != secret:
+                if not hmac.compare_digest(provided, secret):
                     self.send_response(401)
                     self.end_headers()
                     return
