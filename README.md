@@ -5,16 +5,15 @@ Pacific session, looks for **fair value gaps (FVGs)** and **order blocks
 (OBs)**, and journals a trade idea (entry / stop / targets / rationale)
 whenever price sets up at an unmitigated zone.
 
-## Data source: why Bybit instead of TradingView
+## Data source: why Bybit instead of TradingView (and it doesn't have to be Bybit)
 
 TradingView does not offer a public, headless API for pulling historical
 OHLC candles into third-party code. Its "Advanced Charts" library is an
 embeddable UI widget (for displaying charts inside your own app), and real
 programmatic market-data access requires becoming an approved
 broker/exchange integration — there's no free REST endpoint a script can
-just call. So, per the fallback you described, this agent pulls candles
-directly from **Bybit's public v5 market-data API**, which is free and
-requires no account or API key for market data:
+just call. So the default here is **Bybit's public v5 market-data API**,
+which is free and requires no account or API key:
 
 ```
 GET https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=15
@@ -26,9 +25,36 @@ this agent's built-in webhook receiver (`trading-agent webhook`) — see
 below. That gets you TradingView's alert engine feeding the same journal,
 without needing a data API that doesn't exist for regular accounts.
 
+**Bybit isn't required, though.** Every command takes `--data-source`, and
+the client TradingAgent talks to is a small interface
+(`get_klines(limit)` / `get_ticker_price()`) — swap the source without
+touching the detection logic at all:
+
+```bash
+python run_agent.py --data-source bybit once        # default, no API key
+python run_agent.py --data-source twelvedata once    # needs an API key, see below
+```
+
+**Twelve Data** (`trading_agent/twelvedata_client.py`) is the built-in
+alternative — a plain REST client, independent of any exchange, that works
+anywhere with normal internet access (unlike this repo's own sandboxed dev
+session, which blocks outbound requests to *every* external host, Bybit
+included — that's what prompted adding a second source). Get a free key at
+[twelvedata.com](https://twelvedata.com) and either pass
+`--twelvedata-api-key` or set `TWELVEDATA_API_KEY`. Its default symbol is
+`BTC/USD` (vs. Bybit's `BTCUSDT`) — override with `--symbol` if needed.
+Live `alerts` monitoring falls back to REST ticker polling automatically
+for non-Bybit sources, since Twelve Data's free tier has no public
+WebSocket here; pass `--price-source rest` explicitly if you want to be
+sure.
+
+Adding another source (Coinbase, Kraken, whatever you can reach) means
+writing one small class with those same two methods — see
+`bybit_client.py` or `twelvedata_client.py` for the shape.
+
 ## What it actually does (and doesn't do)
 
-- Fetches recent 15m BTCUSDT candles from Bybit.
+- Fetches recent 15m BTC candles from Bybit (default) or another configured source.
 - Detects fair value gaps (3-candle imbalances) and order blocks (last
   opposite-colour candle before a break of market structure), tracking
   whether each has since been mitigated (price traded back through it).
@@ -53,10 +79,11 @@ without needing a data API that doesn't exist for regular accounts.
 pip install -r requirements.txt
 ```
 
-Requires network access to `api.bybit.com`. (Note: some sandboxed/CI
-environments block outbound requests to arbitrary hosts by policy — if
-`trading-agent once` can't reach Bybit, run it somewhere with normal
-outbound HTTPS access, e.g. your own machine.)
+Requires network access to whichever data source you use (`api.bybit.com`
+by default, `api.twelvedata.com` for `--data-source twelvedata`). Some
+sandboxed/CI environments block outbound requests to *any* external host
+by policy — if a command can't reach its data source, run it somewhere
+with normal outbound HTTPS access, e.g. your own machine.
 
 ## Usage
 
@@ -90,8 +117,37 @@ Get live alerts the moment price touches, retests, or disrespects a zone:
 python run_agent.py alerts
 ```
 
+Watch it happen visually — a live-updating candlestick chart in your browser:
+
+```bash
+python run_agent.py app
+```
+
 Common flags (available on all subcommands): `--symbol`, `--interval`,
 `--category` (Bybit product type, default `linear`), `--journal-dir`.
+
+## Live chart app (`app` command)
+
+Opens a local web page with a real-time candlestick chart: FVG and
+order-block zones drawn to scale, the current trade plan overlaid (entry,
+stop, targets, with the reward-to-risk ratio called out), and a live alert
+feed — all updating as price moves, no manual refresh.
+
+```bash
+python run_agent.py app                     # http://127.0.0.1:8080
+python run_agent.py app --port 9000
+python run_agent.py --data-source twelvedata --twelvedata-api-key <key> app
+```
+
+This runs entirely on your own machine — there's no cloud dashboard or
+third-party page involved, so it needs real network access to your chosen
+data source just like `once`/`loop`/`alerts` do. Mechanically: a background
+thread keeps the price/zones updated (same `fetch_and_detect` pipeline as
+every other command, plus a `ZoneAlertEngine` for the live alert feed) and
+pushes each change to your browser over Server-Sent Events; the page itself
+is a small static HTML/JS file served from `trading_agent/live_app.py`, no
+external JS framework. `--price-source`, `--recompute-seconds`, and
+`--proximity-pct` work the same as on `alerts`.
 
 ## Live alerts (`alerts` command)
 
@@ -143,6 +199,76 @@ python run_agent.py report                              # writes data/dashboard.
 python run_agent.py report --output today.html --start 2026-09-15 --end 2026-09-15
 ```
 
+## Running it every day (your own machine)
+
+This has to run somewhere with real outbound access to `api.bybit.com` —
+sandboxed dev/CI environments often block that by policy. Run it on your
+own machine, a VPS, or any host with normal internet access.
+
+`trading-agent loop` and `trading-agent alerts` already gate themselves to
+the 6-9am Pacific window internally (DST-aware), so the simplest setup is
+just: keep the process running continuously, and it idles itself outside
+the session. Pick whichever fits your OS:
+
+**macOS (launchd)** — save as `~/Library/LaunchAgents/com.you.trading-agent.plist`,
+substituting your repo path, then `launchctl load` it:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.you.trading-agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/path/to/Ai-agent-chart-analyst/run_agent.py</string>
+    <string>loop</string>
+  </array>
+  <key>WorkingDirectory</key><string>/path/to/Ai-agent-chart-analyst</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/trading-agent.log</string>
+  <key>StandardErrorPath</key><string>/tmp/trading-agent-error.log</string>
+</dict>
+</plist>
+```
+
+**Linux (systemd --user)** — save as `~/.config/systemd/user/trading-agent.service`:
+
+```ini
+[Unit]
+Description=BTC FVG/order-block trading agent
+
+[Service]
+WorkingDirectory=/path/to/Ai-agent-chart-analyst
+ExecStart=/usr/bin/python3 run_agent.py loop
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+```
+
+Then: `systemctl --user enable --now trading-agent.service`
+
+**Either OS, simpler but less robust** — just run `trading-agent loop` (or
+`alerts`) in a `tmux`/`screen` session and leave it attached.
+
+**Daily dashboard** — generate a fresh `report` once the session closes.
+Cron understands `CRON_TZ` (Linux; on macOS use `TZ=` and adjust for UTC
+manually, since launchd's calendar trigger has no timezone support beyond
+the system clock):
+
+```cron
+CRON_TZ=America/Los_Angeles
+5 9 * * * cd /path/to/Ai-agent-chart-analyst && /usr/bin/python3 run_agent.py report --output "data/dashboard-$(date +\%F).html"
+```
+
+**Windows** — Task Scheduler, action `python.exe run_agent.py loop`,
+trigger "At log on" with "Repeat task" disabled (`loop` runs forever on
+its own).
+
 ## Journal output
 
 Each cycle appends a JSON line to `data/journal/<YYYY-MM-DD>.jsonl` with
@@ -154,7 +280,8 @@ trade idea (if any) — entry, stop, targets, confidence, and rationale.
 ```
 trading_agent/
   models.py       dataclasses: Candle, FairValueGap, OrderBlock, TradeIdea, ...
-  bybit_client.py public Bybit v5 kline/ticker fetcher
+  bybit_client.py      public Bybit v5 kline/ticker fetcher (default data source)
+  twelvedata_client.py Twelve Data REST kline/ticker fetcher (alternative data source)
   smc.py          FVG / order block / confluence-zone detection
   strategy.py     turns detected zones into a single trade idea
   alerts.py       touch/retest/disrespect state machine + proximity filtering
@@ -163,9 +290,10 @@ trading_agent/
   session.py      6-9am Pacific window logic (DST-aware)
   journal.py      JSONL trade journal
   report.py       renders the journal into a self-contained HTML dashboard
-  agent.py        orchestrates one cycle, a session loop, or live alerting
+  live_app.py     local live web app (real-time chart, SSE, stdlib HTTP server)
+  agent.py        orchestrates one cycle, a session loop, live alerting, or the live app
   tv_webhook.py   optional TradingView alert webhook receiver
-  cli.py          `once` / `loop` / `alerts` / `report` / `webhook` commands
+  cli.py          `once` / `loop` / `alerts` / `app` / `report` / `webhook` commands
 tests/            unit tests (FVG/OB detection, strategy, alerts, session, Bybit client parsing)
 ```
 
@@ -176,4 +304,9 @@ python -m pytest
 ```
 
 All detection/strategy/session/client-parsing logic is covered with
-synthetic data, so the suite runs with no network access.
+synthetic data, so the suite runs with no network access. There's also a
+regression fixture (`tests/fixtures/btc_15m_2026-09-13_to_15.csv`) captured
+from a real BTC/USD 15m feed, validated against the detection pipeline and
+spot-checked candle-by-candle against each zone's own definition -- this
+catches edge cases (real precision, real volatility clustering) that
+hand-built synthetic candles tend not to.

@@ -30,8 +30,8 @@ def test_get_klines_parses_and_reorders_chronologically():
             ]
         },
     }
-    client = BybitClient(session=_fake_session(payload))
-    candles = client.get_klines(symbol="BTCUSDT", interval="15", limit=3)
+    client = BybitClient(symbol="BTCUSDT", interval_minutes=15, session=_fake_session(payload))
+    candles = client.get_klines(limit=3)
 
     assert [c.timestamp_ms for c in candles] == [1000, 2000, 3000]
     assert candles[0].close == 100.5
@@ -40,16 +40,16 @@ def test_get_klines_parses_and_reorders_chronologically():
 
 def test_get_klines_raises_on_api_error():
     payload = {"retCode": 10001, "retMsg": "invalid symbol", "result": {"list": []}}
-    client = BybitClient(session=_fake_session(payload))
+    client = BybitClient(symbol="NOPE", session=_fake_session(payload))
     with pytest.raises(BybitAPIError):
-        client.get_klines(symbol="NOPE")
+        client.get_klines()
 
 
 def test_get_klines_passes_request_params():
     payload = {"retCode": 0, "retMsg": "OK", "result": {"list": []}}
     session = _fake_session(payload)
-    client = BybitClient(session=session)
-    client.get_klines(symbol="BTCUSDT", interval="15", category="linear", limit=200)
+    client = BybitClient(symbol="BTCUSDT", interval_minutes=15, category="linear", session=session)
+    client.get_klines(limit=200)
 
     _, kwargs = session.get.call_args
     assert kwargs["params"] == {
@@ -58,3 +58,20 @@ def test_get_klines_passes_request_params():
         "interval": "15",
         "limit": 200,
     }
+
+
+def test_get_ticker_price_parses_last_price():
+    payload = {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {"list": [{"lastPrice": "61234.56"}]},
+    }
+    client = BybitClient(symbol="BTCUSDT", session=_fake_session(payload))
+    assert client.get_ticker_price() == 61234.56
+
+
+def test_get_ticker_price_raises_on_empty_list():
+    payload = {"retCode": 0, "retMsg": "OK", "result": {"list": []}}
+    client = BybitClient(symbol="BTCUSDT", session=_fake_session(payload))
+    with pytest.raises(BybitAPIError):
+        client.get_ticker_price()

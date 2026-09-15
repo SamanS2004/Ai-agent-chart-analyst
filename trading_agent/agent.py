@@ -5,42 +5,61 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from typing import Callable, Literal
+from typing import Callable, Literal, Protocol
 
 from .alerts import Alert, ZoneAlertEngine, filter_zones_near_price, zone_specs_from_detections
 from .bybit_client import BybitClient
 from .journal import TradeJournal
 from .live_stream import BybitTickerWebSocket
-from .models import AnalysisResult
+from .models import (
+    AnalysisResult,
+    Candle,
+    ConfluenceZone,
+    FairValueGap,
+    OrderBlock,
+    TradeIdea,
+)
 from .session import PACIFIC, is_session_active, seconds_until_next_session
 from .smc import find_confluence_zones, find_fair_value_gaps, find_order_blocks
 from .strategy import generate_trade_idea
 
 
+class ChartDataClient(Protocol):
+    """What TradingAgent needs from a data source -- BybitClient and
+    TwelveDataClient both implement this; a source is already configured
+    (symbol, interval, ...) at construction, so these calls take no params
+    beyond how much history to fetch."""
+
+    def get_klines(self, limit: int = 200) -> list[Candle]: ...
+    def get_ticker_price(self) -> float: ...
+
+
 class TradingAgent:
     def __init__(
         self,
-        client: BybitClient,
+        client: ChartDataClient,
         journal: TradeJournal,
         symbol: str = "BTCUSDT",
-        interval: str = "15",
-        category: str = "linear",
+        interval: int = 15,
         candle_limit: int = 200,
     ) -> None:
+        """`symbol`/`interval` are for labeling journal entries and reports --
+        the client is already configured with whatever it needs to fetch."""
         self.client = client
         self.journal = journal
         self.symbol = symbol
         self.interval = interval
-        self.category = category
         self.candle_limit = candle_limit
 
-    def analyze_once(self) -> AnalysisResult:
-        candles = self.client.get_klines(
-            symbol=self.symbol,
-            interval=self.interval,
-            category=self.category,
-            limit=self.candle_limit,
-        )
+    def fetch_and_detect(
+        self,
+    ) -> tuple[
+        list[Candle], list[FairValueGap], list[OrderBlock], list[ConfluenceZone], TradeIdea | None
+    ]:
+        """Fetch fresh candles and run the full detection pipeline. Shared by
+        analyze_once, the alerts zone-recompute loop, and the live web app --
+        the single place that turns raw candles into zones/idea."""
+        candles = self.client.get_klines(limit=self.candle_limit)
         if not candles:
             raise RuntimeError(f"No candles returned for {self.symbol} {self.interval}m")
 
@@ -48,6 +67,10 @@ class TradingAgent:
         order_blocks = find_order_blocks(candles)
         zones = find_confluence_zones(fvgs, order_blocks)
         idea = generate_trade_idea(candles, fvgs, order_blocks, zones)
+        return candles, fvgs, order_blocks, zones, idea
+
+    def analyze_once(self) -> AnalysisResult:
+        candles, fvgs, order_blocks, zones, idea = self.fetch_and_detect()
 
         last = candles[-1]
         result = AnalysisResult(
@@ -87,14 +110,7 @@ class TradingAgent:
                 sleep_fn(min(wait, poll_seconds))
 
     def _refresh_zones(self, engine: ZoneAlertEngine, proximity_pct: float = 0.05) -> None:
-        candles = self.client.get_klines(
-            symbol=self.symbol,
-            interval=self.interval,
-            category=self.category,
-            limit=self.candle_limit,
-        )
-        fvgs = find_fair_value_gaps(candles)
-        order_blocks = find_order_blocks(candles)
+        candles, fvgs, order_blocks, _zones, _idea = self.fetch_and_detect()
         specs = zone_specs_from_detections(fvgs, order_blocks)
         specs = filter_zones_near_price(specs, candles[-1].close, proximity_pct)
         engine.sync_zones(specs)
@@ -117,6 +133,12 @@ class TradingAgent:
         during the 6-9am Pacific session (set `always_on=True` to disable
         that restriction). Only zones within `proximity_pct` of price are
         tracked, so old, far-away history doesn't flood alerts."""
+        if price_source == "ws" and not isinstance(self.client, BybitClient):
+            raise ValueError(
+                "price_source='ws' is only supported with BybitClient (the only "
+                "source with a free public WebSocket here) -- use price_source='rest' "
+                "for other data sources."
+            )
         engine = ZoneAlertEngine()
 
         def handle_price(price: float, timestamp_ms: int | None = None) -> None:
@@ -176,7 +198,7 @@ class TradingAgent:
         dispatch_thread.start()
 
         stream = BybitTickerWebSocket(
-            symbol=self.symbol,
+            symbol=self.client.symbol,
             on_price=ws_handle_price,
             on_status=lambda msg: self.journal.log_event(f"price stream: {msg}"),
         )
@@ -211,7 +233,7 @@ class TradingAgent:
                         self.journal.log_event(f"zone refresh error: {exc}")
                     elapsed_since_recompute = 0
                 try:
-                    price = self.client.get_ticker_price(symbol=self.symbol, category=self.category)
+                    price = self.client.get_ticker_price()
                     handle_price(price, None)
                 except Exception as exc:
                     self.journal.log_event(f"price poll error: {exc}")

@@ -4,8 +4,9 @@ TradingView does not expose a public, headless API for pulling historical
 OHLC candles from third-party code -- its charting library is an embeddable
 UI widget, and real-time data access requires a broker/exchange integration
 approval. Bybit's v5 market endpoints are free, require no API key for
-market data, and are what this agent uses by default. See tv_webhook.py for
-an optional way to accept TradingView *alerts* into the same pipeline.
+market data, and are the default data source here. See twelvedata_client.py
+for a non-Bybit alternative, and tv_webhook.py for an optional way to accept
+TradingView *alerts* into the same pipeline.
 """
 
 from __future__ import annotations
@@ -24,26 +25,26 @@ class BybitAPIError(RuntimeError):
 class BybitClient:
     def __init__(
         self,
+        symbol: str = "BTCUSDT",
+        interval_minutes: int = 15,
+        category: str = "linear",
         base_url: str = DEFAULT_BASE_URL,
         session: requests.Session | None = None,
         timeout: float = 10.0,
     ) -> None:
+        self.symbol = symbol
+        self.interval_minutes = interval_minutes
+        self.category = category
         self.base_url = base_url.rstrip("/")
         self._session = session or requests.Session()
         self.timeout = timeout
 
-    def get_klines(
-        self,
-        symbol: str = "BTCUSDT",
-        interval: str = "15",
-        category: str = "linear",
-        limit: int = 200,
-    ) -> list[Candle]:
+    def get_klines(self, limit: int = 200) -> list[Candle]:
         """Fetch candles in chronological (oldest -> newest) order."""
         params = {
-            "category": category,
-            "symbol": symbol,
-            "interval": interval,
+            "category": self.category,
+            "symbol": self.symbol,
+            "interval": str(self.interval_minutes),
             "limit": min(limit, 1000),
         }
         response = self._session.get(
@@ -70,9 +71,9 @@ class BybitClient:
         candles.reverse()  # Bybit returns newest-first
         return candles
 
-    def get_ticker_price(self, symbol: str = "BTCUSDT", category: str = "linear") -> float:
+    def get_ticker_price(self) -> float:
         """Last traded price, for REST-polling-based live monitoring."""
-        params = {"category": category, "symbol": symbol}
+        params = {"category": self.category, "symbol": self.symbol}
         response = self._session.get(
             f"{self.base_url}/v5/market/tickers", params=params, timeout=self.timeout
         )
@@ -84,5 +85,5 @@ class BybitClient:
 
         rows = payload["result"]["list"]
         if not rows:
-            raise BybitAPIError(f"no ticker data for {symbol}")
+            raise BybitAPIError(f"no ticker data for {self.symbol}")
         return float(rows[0]["lastPrice"])
