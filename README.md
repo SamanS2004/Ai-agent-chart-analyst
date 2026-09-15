@@ -56,7 +56,9 @@ writing one small class with those same two methods — see
 
 - Fetches recent 15m BTC candles from Bybit (default) or another configured source.
 - Detects fair value gaps (3-candle imbalances) and order blocks (last
-  opposite-colour candle before a break of market structure), tracking
+  opposite-colour candle before a break of market structure that also
+  leaves a fair value gap immediately behind it — a same-direction swing
+  break with no gap is not treated as a valid order block), tracking
   whether each has since been mitigated (price traded back through it).
 - When price is approaching an unmitigated zone, it computes a trade idea:
   entry at the zone edge, stop beyond the zone, targets at 2R/3R, plus a

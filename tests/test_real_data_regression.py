@@ -99,7 +99,12 @@ def test_detected_zone_matches_its_own_definition():
 
 def test_counts_are_stable_snapshot():
     """Pins current behavior against this exact dataset. A change here means
-    the detection logic changed -- update deliberately, don't just re-pin."""
+    the detection logic changed -- update deliberately, don't just re-pin.
+
+    order_blocks dropped from 13 to 5 when find_order_blocks started
+    requiring a confirming fair-value-gap behind each candidate order block
+    (an order block with no imbalance behind it is not treated as valid) --
+    the other 8 were exactly that kind of false positive."""
     candles = _load_candles()
     fvgs = find_fair_value_gaps(candles)
     order_blocks = find_order_blocks(candles)
@@ -107,6 +112,6 @@ def test_counts_are_stable_snapshot():
 
     assert len(fvgs) == 52
     assert sum(not f.mitigated for f in fvgs) == 13
-    assert len(order_blocks) == 13
+    assert len(order_blocks) == 5
     assert sum(not o.mitigated for o in order_blocks) == 0
     assert len(zones) == 0

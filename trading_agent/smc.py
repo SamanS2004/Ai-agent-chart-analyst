@@ -67,15 +67,20 @@ def _most_recent_before(indices: list[int], i: int) -> int | None:
 
 
 def find_order_blocks(candles: list[Candle], swing_lookback: int = 2) -> list[OrderBlock]:
-    """Last opposite-colour candle before a move that breaks the most recent swing point."""
+    """Last opposite-colour candle before a move that (a) breaks the most
+    recent swing point and (b) leaves a fair value gap immediately behind it
+    -- i.e. the order block candle's range doesn't overlap the candle two
+    bars later. That gap is what marks genuine imbalance/institutional
+    participation at that candle; a same-direction break with no gap behind
+    it is not treated as a valid order block, only a naive swing break."""
     swing_highs, swing_lows = _swing_points(candles, swing_lookback)
     blocks: list[OrderBlock] = []
-    for i in range(1, len(candles)):
-        prev, cur = candles[i - 1], candles[i]
+    for i in range(1, len(candles) - 1):  # need candles[i + 1] to confirm the gap
+        prev, cur, nxt = candles[i - 1], candles[i], candles[i + 1]
 
         if prev.is_bearish and cur.is_bullish:
             swing = _most_recent_before(swing_highs, i)
-            if swing is not None and cur.close > candles[swing].high:
+            if swing is not None and cur.close > candles[swing].high and prev.high < nxt.low:
                 blocks.append(
                     OrderBlock(
                         kind="bullish",
@@ -88,7 +93,7 @@ def find_order_blocks(candles: list[Candle], swing_lookback: int = 2) -> list[Or
 
         if prev.is_bullish and cur.is_bearish:
             swing = _most_recent_before(swing_lows, i)
-            if swing is not None and cur.close < candles[swing].low:
+            if swing is not None and cur.close < candles[swing].low and prev.low > nxt.high:
                 blocks.append(
                     OrderBlock(
                         kind="bearish",
