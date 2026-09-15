@@ -87,11 +87,43 @@ def test_bullish_order_block_detected_on_structure_break():
 
 
 def test_order_block_not_mitigated_before_price_returns():
-    candles = _structure_break_candles()[:7]  # stop right after formation, no retrace yet
+    # Need through index 7 (not just the breakout at 6) so the gap-confirming
+    # candle exists; stop right there, before any retrace back into the zone.
+    candles = _structure_break_candles()[:8]
     blocks = find_order_blocks(candles)
     bullish = [b for b in blocks if b.kind == "bullish"]
     assert len(bullish) == 1
     assert bullish[0].mitigated is False
+
+
+def _order_block_candles(confirming_low: float):
+    return [
+        candle(0, 100, 100, 99, 99.5),
+        candle(1, 99.5, 101, 99, 100.5),
+        candle(2, 100.5, 105, 100, 104),  # swing high at index 2 (high=105)
+        candle(3, 104, 103, 102, 102.5),
+        candle(4, 102.5, 104, 101, 101.5),
+        candle(5, 101.5, 102, 99, 99.5),  # candidate order block (bearish, high=102)
+        candle(6, 103, 109, 103, 108),  # breakout: close(108) > swing high(105)
+        candle(7, 108, 110, confirming_low, 109.5),  # confirms (or not) a gap behind the OB
+    ]
+
+
+def test_order_block_valid_when_it_leaves_a_gap_behind_it():
+    # confirming candle's low (107) stays above the OB candle's high (102) -> a gap
+    candles = _order_block_candles(confirming_low=107)
+    blocks = find_order_blocks(candles)
+    bullish = [b for b in blocks if b.kind == "bullish"]
+    assert len(bullish) == 1
+    assert bullish[0].index == 5
+
+
+def test_order_block_invalid_when_no_gap_forms_behind_it():
+    # confirming candle's low (101) dips back into the OB candle's range -> no gap
+    candles = _order_block_candles(confirming_low=101)
+    blocks = find_order_blocks(candles)
+    bullish = [b for b in blocks if b.kind == "bullish"]
+    assert bullish == []
 
 
 def test_confluence_zone_requires_overlap_of_same_bias():
