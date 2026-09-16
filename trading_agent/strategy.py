@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .models import Candle, ConfluenceZone, FairValueGap, OrderBlock, PriorityZone, TradeIdea
+from .smc import order_block_is_tradeable
 from .stacking import resolve_fvg_stacks
 
 _MIN_R_MULTIPLE_TARGETS = (2.0, 3.0)
@@ -54,7 +55,10 @@ def generate_trade_idea(
 
 
 def _nearest_order_block(order_blocks: list[OrderBlock], price: float) -> OrderBlock | None:
-    candidates = [o for o in order_blocks if not o.mitigated and _zone_is_approachable(o.kind, o.top, o.bottom, price)]
+    candidates = [
+        o for o in order_blocks
+        if order_block_is_tradeable(o) and _zone_is_approachable(o.kind, o.top, o.bottom, price)
+    ]
     if not candidates:
         return None
     return min(candidates, key=lambda o: _distance(o.kind, o.top, o.bottom, price))

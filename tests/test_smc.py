@@ -1,5 +1,11 @@
-from trading_agent.models import Candle
-from trading_agent.smc import find_confluence_zones, find_fair_value_gaps, find_order_blocks
+from trading_agent.models import Candle, FairValueGap, OrderBlock
+from trading_agent.smc import (
+    find_confluence_zones,
+    find_fair_value_gaps,
+    find_order_blocks,
+    fvg_is_tradeable,
+    order_block_is_tradeable,
+)
 
 
 def candle(ts, o, h, l, cl, v=1.0):
@@ -50,6 +56,41 @@ def test_fvg_mitigation_when_price_returns():
     ]
     gaps = find_fair_value_gaps(candles)
     assert gaps[0].mitigated is True
+
+
+def test_fvg_touch_classified_as_retest_when_close_holds_the_level():
+    candles = [
+        candle(0, 100, 101, 99, 100.5),
+        candle(1, 100.5, 110, 100, 109),
+        candle(2, 109, 115, 108, 114),  # bullish gap [101, 108]
+        candle(3, 114, 116, 105, 110),  # dips in (low=105) but closes above bottom(101)
+    ]
+    gaps = find_fair_value_gaps(candles)
+    assert gaps[0].mitigation_type == "retest"
+
+
+def test_fvg_touch_classified_as_disrespect_when_close_breaks_through():
+    candles = [
+        candle(0, 100, 101, 99, 100.5),
+        candle(1, 100.5, 110, 100, 109),
+        candle(2, 109, 115, 108, 114),  # bullish gap [101, 108]
+        candle(3, 114, 116, 95, 98),  # wicks through and closes below bottom(101)
+    ]
+    gaps = find_fair_value_gaps(candles)
+    assert gaps[0].mitigation_type == "disrespect"
+
+
+def test_fvg_is_tradeable_regardless_of_touch_type():
+    untouched = FairValueGap(kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0)
+    retested = FairValueGap(
+        kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0, mitigated=True, mitigation_type="retest"
+    )
+    disrespected = FairValueGap(
+        kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0, mitigated=True, mitigation_type="disrespect"
+    )
+    assert fvg_is_tradeable(untouched)
+    assert fvg_is_tradeable(retested)
+    assert fvg_is_tradeable(disrespected)
 
 
 def test_fvg_not_mitigated_when_price_stays_away():
@@ -126,6 +167,39 @@ def test_order_block_invalid_when_no_gap_forms_behind_it():
     assert bullish == []
 
 
+def test_order_block_touch_classified_as_retest_when_close_holds_the_level():
+    candles = _order_block_candles(confirming_low=107) + [
+        candle(8, 109.5, 110, 100, 109),  # wicks into [99, 102] but closes back above it
+    ]
+    blocks = find_order_blocks(candles)
+    bullish = [b for b in blocks if b.kind == "bullish"]
+    assert bullish[0].mitigated is True
+    assert bullish[0].mitigation_type == "retest"
+
+
+def test_order_block_touch_classified_as_disrespect_when_close_breaks_through():
+    candles = _order_block_candles(confirming_low=107) + [
+        candle(8, 109.5, 110, 95, 96),  # closes below the block's bottom(99) entirely
+    ]
+    blocks = find_order_blocks(candles)
+    bullish = [b for b in blocks if b.kind == "bullish"]
+    assert bullish[0].mitigated is True
+    assert bullish[0].mitigation_type == "disrespect"
+
+
+def test_order_block_is_tradeable_only_when_untouched_or_retested():
+    untouched = OrderBlock(kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0)
+    retested = OrderBlock(
+        kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0, mitigated=True, mitigation_type="retest"
+    )
+    disrespected = OrderBlock(
+        kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0, mitigated=True, mitigation_type="disrespect"
+    )
+    assert order_block_is_tradeable(untouched)
+    assert order_block_is_tradeable(retested)
+    assert not order_block_is_tradeable(disrespected)
+
+
 def test_confluence_zone_requires_overlap_of_same_bias():
     candles = _structure_break_candles()
     fvgs = find_fair_value_gaps(candles)
@@ -134,3 +208,22 @@ def test_confluence_zone_requires_overlap_of_same_bias():
     for zone in zones:
         assert zone.top >= zone.bottom
         assert zone.fvg.kind == zone.kind == zone.order_block.kind
+
+
+def test_confluence_zone_excludes_a_disrespected_order_block():
+    fvg = FairValueGap(kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0)
+    ob = OrderBlock(
+        kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0, mitigated=True, mitigation_type="disrespect"
+    )
+    assert find_confluence_zones([fvg], [ob]) == []
+
+
+def test_confluence_zone_includes_a_mitigated_fvg():
+    # An FVG stays a valid confluence candidate whether it's been touched
+    # or not -- only order blocks are disqualified by a bad touch.
+    fvg = FairValueGap(
+        kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0, mitigated=True, mitigation_type="disrespect"
+    )
+    ob = OrderBlock(kind="bullish", top=10, bottom=5, index=0, timestamp_ms=0)
+    zones = find_confluence_zones([fvg], [ob])
+    assert len(zones) == 1

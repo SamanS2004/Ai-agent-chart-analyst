@@ -36,6 +36,7 @@ caller to use in confidence/rationale rather than dropped.
 from __future__ import annotations
 
 from .models import ConfluenceZone, FairValueGap, PriorityZone
+from .smc import fvg_is_tradeable
 
 DEFAULT_MAX_INDEX_GAP = 2  # candles between FVGs to still count as "back to back"
 
@@ -89,7 +90,7 @@ def resolve_fvg_stacks(
     an entry, with the stacking/prioritization already resolved."""
     equilibrium = (range_high + range_low) / 2
     eligible = [
-        f for f in fvgs if not f.mitigated and _passes_discount_premium(f, equilibrium)
+        f for f in fvgs if fvg_is_tradeable(f) and _passes_discount_premium(f, equilibrium)
     ]
     if not eligible:
         return []

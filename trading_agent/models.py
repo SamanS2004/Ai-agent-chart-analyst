@@ -5,6 +5,12 @@ from typing import Literal, Optional
 
 Kind = Literal["bullish", "bearish"]
 
+# How price behaved the first time it came back to a zone: "retest" means it
+# wicked in and closed back out (respected the level); "disrespect" means a
+# candle closed all the way through it. See smc.py's fvg_is_tradeable /
+# order_block_is_tradeable for what each kind of zone does with this.
+TouchType = Literal["retest", "disrespect"]
+
 
 @dataclass(frozen=True)
 class Candle:
@@ -40,6 +46,7 @@ class FairValueGap:
     index: int
     timestamp_ms: int
     mitigated: bool = False
+    mitigation_type: Optional[TouchType] = None
 
     @property
     def mid(self) -> float:
@@ -54,6 +61,7 @@ class OrderBlock:
     index: int
     timestamp_ms: int
     mitigated: bool = False
+    mitigation_type: Optional[TouchType] = None
 
     @property
     def mid(self) -> float:

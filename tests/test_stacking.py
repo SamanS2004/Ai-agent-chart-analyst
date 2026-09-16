@@ -2,8 +2,16 @@ from trading_agent.models import ConfluenceZone, FairValueGap, OrderBlock
 from trading_agent.stacking import group_into_stacks, resolve_fvg_stacks
 
 
-def fvg(kind, top, bottom, index, mitigated=False):
-    return FairValueGap(kind=kind, top=top, bottom=bottom, index=index, timestamp_ms=index * 1000, mitigated=mitigated)
+def fvg(kind, top, bottom, index, mitigated=False, mitigation_type=None):
+    return FairValueGap(
+        kind=kind,
+        top=top,
+        bottom=bottom,
+        index=index,
+        timestamp_ms=index * 1000,
+        mitigated=mitigated,
+        mitigation_type=mitigation_type,
+    )
 
 
 def test_group_into_stacks_groups_back_to_back_same_kind_gaps():
@@ -127,7 +135,15 @@ def test_resolve_stack_marks_widest_member():
     assert zones[0].is_widest_in_stack is False  # the selected (nearest) one isn't the widest
 
 
-def test_resolve_stack_ignores_mitigated_gaps():
-    stack = [fvg("bullish", top=96, bottom=94, index=10, mitigated=True)]
+def test_resolve_stack_includes_a_retested_gap():
+    # FVGs are tradeable on a retest, not just their first approach.
+    stack = [fvg("bullish", top=96, bottom=94, index=10, mitigated=True, mitigation_type="retest")]
     zones = resolve_fvg_stacks(stack, [], price=97, range_high=130, range_low=90)
-    assert zones == []
+    assert len(zones) == 1
+
+
+def test_resolve_stack_includes_a_disrespected_gap():
+    # And on a disrespect too -- filling the gap is the thesis either way.
+    stack = [fvg("bullish", top=96, bottom=94, index=10, mitigated=True, mitigation_type="disrespect")]
+    zones = resolve_fvg_stacks(stack, [], price=97, range_high=130, range_low=90)
+    assert len(zones) == 1

@@ -59,8 +59,10 @@ writing one small class with those same two methods — see
   opposite-colour candle before a break of market structure that also
   leaves a fair value gap immediately behind it — a same-direction swing
   break with no gap is not treated as a valid order block), tracking
-  whether each has since been mitigated (price traded back through it).
-- When price is approaching an unmitigated zone, it computes a trade idea:
+  whether each has since been mitigated (price traded back through it) and,
+  if so, whether that touch was a retest or a disrespect — see "Retests vs.
+  disrespects" below for what that changes.
+- When price is approaching a tradeable zone, it computes a trade idea:
   entry at the zone edge, stop beyond the zone, targets at 2R/3R, plus a
   plain-English rationale.
 - FVGs that formed back to back during one strong push are treated as one
@@ -106,6 +108,31 @@ the nearest-price pick — once discount/premium and confluence have already
 picked a winner, folding in a third, differently-scaled criterion (price
 distance vs. gap width) would make the result depend on arbitrary
 weighting between them.
+
+## Retests vs. disrespects (`smc.fvg_is_tradeable` / `smc.order_block_is_tradeable`)
+
+The first candle that trades back into a zone is classified by how it left:
+
+- **Retest** — it wicked into the zone and closed back out, respecting the
+  level.
+- **Disrespect** — it closed all the way through to the far side, breaking
+  the level.
+
+The two zone types treat that differently:
+
+- **Fair value gaps are tradeable on either one.** The thesis for an FVG
+  trade is that the inefficiency gets filled and reacted to — a clean
+  retest and a disrespect-then-reversal both satisfy that, so a touched FVG
+  stays a candidate, not just an untouched one.
+- **Order blocks are only tradeable on a retest.** A disrespected order
+  block — price closing straight through it — means that level failed as
+  real structure and it's excluded for good; an untouched or once-retested
+  block stays live.
+
+This is a strictly geometric, close-price check (see `_classify_touch` in
+`smc.py`), computed the moment a zone is first touched — it doesn't track
+how many times a level has been retested since, just what the first touch
+did.
 
 ## Setup
 
