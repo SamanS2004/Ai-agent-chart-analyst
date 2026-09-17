@@ -1,4 +1,16 @@
-# AI Chart Analyst — FVG / Order Block agent for BTC
+# AI Chart Analyst
+
+Two independent agents live in this repo:
+
+- **FVG / Order Block agent for BTC** (below) — watches the BTC 15-minute
+  chart during the 6-9am Pacific session for fair value gaps and order
+  blocks.
+- **[Solana Memecoin Volume/Gain Tracker](#solana-memecoin-volumegain-tracker)**
+  — watches Solana memecoins in real time and alerts when volume picks up
+  alongside a 10-15%+ price gain. Jump to its section below, or run it
+  directly with `python run_solana_agent.py watch`.
+
+## BTC FVG / Order Block agent
 
 An agent that watches the BTC 15-minute chart during the 6:00-9:00am
 Pacific session, looks for **fair value gaps (FVGs)** and **order blocks
@@ -372,3 +384,143 @@ from a real BTC/USD 15m feed, validated against the detection pipeline and
 spot-checked candle-by-candle against each zone's own definition -- this
 catches edge cases (real precision, real volatility clustering) that
 hand-built synthetic candles tend not to.
+
+---
+
+# Solana Memecoin Volume/Gain Tracker
+
+A separate agent (`solana_agent/`) that watches Solana memecoins in real
+time and alerts the moment a token's volume picks up **and** its price has
+run up roughly 10-15% since the agent started watching it -- the classic
+early-pump shape.
+
+**This is a monitoring tool, not a trading bot.** There are no wallet keys,
+no swap/transaction code, and no auto-buy path anywhere in this package --
+it only watches public market data and tells you about it. Solana
+memecoins are extremely high risk: most are unaudited, thinly traded, and a
+meaningful share are outright rug pulls or wash-traded to fake volume. A
+volume+price alert here is a "go look at this," not a signal to buy, and
+nothing in this repo should be treated as financial advice.
+
+## Data source: DexScreener (free, no API key)
+
+Unlike the BTC agent, there's no single "the" price feed for a Solana
+memecoin -- each one trades on whatever DEX pool(s) it's listed on
+(Raydium, Orca, Meteora, a pump.fun bonding curve, ...). [DexScreener](https://docs.dexscreener.com/api/reference)
+indexes all of them and exposes it over a free, keyless REST API, which is
+what this agent uses for everything: discovering trending tokens and
+pulling each pair's live price/volume.
+
+```
+GET https://api.dexscreener.com/latest/dex/tokens/{addresses}   # price/volume for known tokens
+GET https://api.dexscreener.com/token-boosts/latest/v1          # trending/boosted tokens (discovery)
+GET https://api.dexscreener.com/token-profiles/latest/v1        # newest submitted token profiles (discovery)
+```
+
+No wallet, no Solana RPC node, and no paid data provider needed. Like the
+Bybit-based BTC agent, this needs real outbound network access to
+`api.dexscreener.com`, which some sandboxed/CI environments block by
+policy -- run it somewhere with normal internet access if a request fails.
+
+## How it decides what to watch
+
+Every poll cycle, the agent's candidate list is:
+
+1. Any addresses you pass with `--watch-addresses` (always tracked).
+2. DexScreener's own "trending" feeds -- latest + top boosted tokens, and
+   the newest submitted token profiles -- refreshed every
+   `--discover-seconds` (default 300s) since those feeds have a lower rate
+   limit than the price/volume endpoint.
+
+Candidates are resolved to trading pairs, deduplicated to the
+highest-liquidity pool per token (a coin can list on several DEXes at
+once), and filtered to drop dust: `--min-liquidity-usd` (default $5,000)
+and `--min-volume-h24-usd` (default $1,000) screen out pairs too thin for
+a "gain" to mean anything.
+
+## How the gain/volume signal works (`tracker.py` / `signals.py`)
+
+- **Gain** is measured from the lowest price seen *since this agent started
+  watching that pair*, not a fixed calendar window -- once at least 10
+  minutes of local history exists, `(current - recent_low) / recent_low`
+  replaces DexScreener's own `priceChange.h1` figure, which is used as a
+  same-cycle estimate before that.
+- **Volume multiplier** compares the last 5 minutes of volume against that
+  pair's own recent baseline rate (again falling back to
+  `volume.h1 / 12` as an hourly average until enough local samples exist).
+- An alert fires once gain crosses `--gain-min-pct` (default 10%) *and*
+  the volume multiplier crosses `--volume-multiplier` (default 2.0x) --
+  the message also says whether it's within the 10-15% target zone or has
+  run further. Each pair then latches so it doesn't re-alert every poll
+  while it stays elevated; it re-arms only once its gain cools back down
+  by `--reset-buffer-pct` (default 5 points) below the threshold, so a
+  separate later pump still gets its own alert.
+
+## Usage
+
+```bash
+pip install -r requirements.txt
+```
+
+Run one discover+poll cycle right now and print what's being tracked:
+
+```bash
+python run_solana_agent.py once
+```
+
+Watch continuously and alert in real time (Ctrl+C to stop):
+
+```bash
+python run_solana_agent.py watch
+```
+
+Track specific tokens in addition to auto-discovered trending ones (comma
+separated Solana mint addresses):
+
+```bash
+python run_solana_agent.py --watch-addresses <mint1>,<mint2> watch
+```
+
+Tune the thresholds:
+
+```bash
+python run_solana_agent.py --gain-min-pct 10 --gain-target-max-pct 15 --volume-multiplier 2.5 watch
+```
+
+**Where alerts go:** always printed to the terminal (with a bell) and
+logged to `data/solana_journal/<YYYY-MM-DD>.jsonl`. Add
+`--desktop-notify` for a best-effort native OS notification, or
+`--alert-webhook-url <url>` to POST each alert as JSON anywhere -- the
+same ntfy.sh trick from the BTC agent works here too:
+`--alert-webhook-url https://ntfy.sh/<your-topic>` (pipe through a small
+relay if you need it reshaped into ntfy's plain-text body).
+
+Common flags: `--min-liquidity-usd`, `--min-volume-h24-usd`,
+`--no-boosted` / `--no-profiles` (disable either discovery feed),
+`--journal-dir`, `--lookback-seconds` (how much local history to keep per
+pair).
+
+## Project layout
+
+```
+solana_agent/
+  models.py             TokenPair, TrackedPair, Alert dataclasses
+  dexscreener_client.py public DexScreener REST client (search/tokens/boosts/profiles)
+  discovery.py          candidate-token discovery, dedup-to-highest-liquidity, dust filtering
+  tracker.py            per-pair rolling history -> local gain %% / volume multiplier
+  signals.py            threshold + latch/reset state machine -> Alert
+  journal.py            JSONL alert/event journal
+  alert_sinks.py         console/journal/desktop-notification/webhook delivery
+  agent.py              orchestrates discovery + polling + tracking + signaling
+  cli.py                `once` / `watch` commands
+```
+
+## Tests
+
+Same command as the BTC agent (`python -m pytest` runs both suites).
+`tests/test_solana_*.py` covers DexScreener response parsing, discovery
+dedup/filtering, local gain and volume-multiplier math (including the
+API-window fallback before enough local history exists), the alert
+latch/reset state machine, the journal, and the polling/pruning wiring in
+`agent.py` -- all against synthetic fixtures/fakes, so it runs with no
+network access.
