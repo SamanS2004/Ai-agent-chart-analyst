@@ -1,8 +1,12 @@
 """Public (no-auth) DexScreener API client.
 
-DexScreener indexes every Solana DEX pool (Raydium, Orca, Meteora, pump.fun's
-bonding-curve pairs once they graduate, ...) and is free, keyless REST --
-no wallet, no RPC node, no paid data provider needed to watch memecoins.
+DexScreener indexes DEX pools across dozens of chains -- every Solana DEX
+(Raydium, Orca, Meteora, pump.fun's bonding-curve pairs once they graduate,
+...), Robinhood Chain's Uniswap-family pools, and many more -- under one
+free, keyless REST API. No wallet, no RPC node, no paid data provider
+needed to watch memecoins on any chain it covers; which chain a given call
+hits is just whatever `chain_id` string the caller passes (see
+discovery.py's SOLANA_CHAIN_ID / ROBINHOOD_CHAIN_ID).
 Docs: https://docs.dexscreener.com/api/reference
 
 Rate limits (documented, per IP): 300 req/min for /latest/dex/*, 60 req/min

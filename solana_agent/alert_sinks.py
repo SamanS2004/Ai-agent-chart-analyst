@@ -59,16 +59,16 @@ def desktop_notification_sink() -> AlertSink:
             if sys.platform == "darwin":
                 script = (
                     f'display notification "{_escape_applescript(alert.message)}" '
-                    'with title "Solana Memecoin Alert"'
+                    'with title "Memecoin Alert"'
                 )
                 subprocess.run(["osascript", "-e", script], check=False, timeout=5)
             elif sys.platform.startswith("linux"):
                 subprocess.run(
-                    ["notify-send", "Solana Memecoin Alert", alert.message], check=False, timeout=5
+                    ["notify-send", "Memecoin Alert", alert.message], check=False, timeout=5
                 )
             elif sys.platform == "win32":
                 ps = (
-                    "New-BurntToastNotification -Text 'Solana Memecoin Alert', "
+                    "New-BurntToastNotification -Text 'Memecoin Alert', "
                     f"'{_escape_powershell_single_quoted(alert.message)}'"
                 )
                 subprocess.run(["powershell", "-Command", ps], check=False, timeout=5)

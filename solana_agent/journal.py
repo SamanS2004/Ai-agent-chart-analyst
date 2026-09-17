@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .models import Alert
 
-DEFAULT_JOURNAL_DIR = Path("data/solana_journal")
+DEFAULT_JOURNAL_DIR = Path("data/memecoin_journal")
 
 
 class SolanaJournal:

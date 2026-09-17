@@ -1,9 +1,15 @@
-"""Finds candidate Solana memecoin pairs to track: an explicit watchlist
-(if given) plus whatever DexScreener's own 'trending' feed (boosted tokens)
-is currently surfacing, resolved to trading pairs and filtered down to
-well-established ones actually worth watching (real liquidity, real
-volume, and old enough to not be a fresh launch) -- newly launched tokens
-are deliberately excluded, see filter_established() below."""
+"""Finds candidate memecoin pairs to track on a given chain: an explicit
+watchlist (if given) plus whatever DexScreener's own 'trending' feed
+(boosted tokens) is currently surfacing, resolved to trading pairs and
+filtered down to well-established ones actually worth watching (real
+liquidity, real volume, and old enough to not be a fresh launch) -- newly
+launched tokens are deliberately excluded, see filter_established() below.
+
+Nothing here is Solana-specific: every function takes a `chain_id` and
+passes it straight through to DexScreenerClient, which indexes dozens of
+chains the same way. SOLANA_CHAIN_ID and ROBINHOOD_CHAIN_ID are the two
+this agent is built and tested against (see cli.py's --chain-id), but any
+chain slug DexScreener recognizes works the same way."""
 
 from __future__ import annotations
 
@@ -13,6 +19,7 @@ from .dexscreener_client import DexScreenerClient
 from .models import TokenPair
 
 SOLANA_CHAIN_ID = "solana"
+ROBINHOOD_CHAIN_ID = "robinhood"  # Robinhood Chain, an Arbitrum Orbit L2 (on-chain id 4663)
 
 
 def discover_candidate_addresses(

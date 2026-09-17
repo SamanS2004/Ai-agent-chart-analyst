@@ -68,6 +68,28 @@ def test_get_pairs_for_tokens_filters_by_chain():
     assert [p.pair_address for p in pairs] == ["P1"]
 
 
+def test_get_pairs_for_tokens_works_for_robinhood_chain():
+    session = _fake_session(
+        {
+            "pairs": [
+                _raw_pair(
+                    chainId="robinhood",
+                    dexId="uniswap",
+                    pairAddress="0xPair1",
+                    baseToken={"address": "0xToken1", "symbol": "HOOD4663", "name": "Hood Meme"},
+                ),
+                _raw_pair(chainId="solana", pairAddress="P1"),
+            ]
+        }
+    )
+    client = DexScreenerClient(session=session)
+
+    pairs = client.get_pairs_for_tokens("robinhood", ["0xToken1"])
+
+    assert [p.pair_address for p in pairs] == ["0xPair1"]
+    assert pairs[0].chain_id == "robinhood"
+
+
 def test_get_pairs_for_tokens_batches_in_groups_of_30():
     session = _fake_session({"pairs": [_raw_pair()]})
     client = DexScreenerClient(session=session)

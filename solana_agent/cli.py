@@ -63,7 +63,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     on_alert = combine(*sinks)
 
     print(
-        f"Watching Solana memecoins via DexScreener (poll every {args.poll_seconds}s, "
+        f"Watching {args.chain_id} tokens via DexScreener (poll every {args.poll_seconds}s, "
         f"rediscovering trending tokens every {args.discover_seconds}s). "
         f"Alerting on >= {args.gain_min_pct:.0f}% gain with >= {args.volume_multiplier:.1f}x volume. "
         "Ctrl+C to stop."
@@ -81,22 +81,23 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="solana-memecoin-agent",
+        prog="memecoin-agent",
         description=(
-            "Tracks well-established Solana memecoins via DexScreener's free public API "
-            "(no key needed) and alerts in real time when a token's volume picks up "
-            "alongside a 10-15%%+ price gain. Freshly launched tokens are excluded by "
-            "default (see --min-pair-age-days) -- this is for coins that already have "
-            "real liquidity and volume, not new listings. Not financial advice; "
-            "memecoins are extremely high risk (rug pulls, thin liquidity) -- this only "
-            "watches and alerts, it never places trades."
+            "Tracks well-established memecoins on Solana or Robinhood Chain via "
+            "DexScreener's free public API (no key needed) and alerts in real time when "
+            "a token's volume picks up alongside a 10-15%%+ price gain. Freshly launched "
+            "tokens are excluded by default (see --min-pair-age-days) -- this is for "
+            "coins that already have real liquidity and volume, not new listings. Not "
+            "financial advice; memecoins are extremely high risk (rug pulls, thin "
+            "liquidity) -- this only watches and alerts, it never places trades."
         ),
     )
     parser.add_argument(
         "--watch-addresses",
         default=None,
-        help="Comma-separated Solana token mint addresses to always track, in addition to "
-        "auto-discovered trending tokens",
+        help="Comma-separated token addresses to always track, in addition to "
+        "auto-discovered trending tokens (a base58 mint address for --chain-id solana, "
+        "or a 0x... contract address for --chain-id robinhood)",
     )
     parser.add_argument(
         "--no-boosted", action="store_true", help="Don't auto-discover via DexScreener's boosted-token feed"
@@ -114,7 +115,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip any pair younger than this (or with unknown age) -- the main 'stay away "
         "from new pairs' control. 0 disables the age filter",
     )
-    parser.add_argument("--chain-id", default="solana")
+    parser.add_argument(
+        "--chain-id",
+        choices=["solana", "robinhood"],
+        default="solana",
+        help="Which chain to watch: 'solana' (memecoins on Raydium/Orca/Meteora/pump.fun "
+        "pools) or 'robinhood' (Robinhood Chain, an Arbitrum Orbit L2 -- hosts Robinhood's "
+        "tokenized-stock tokens alongside independently launched community/meme tokens). "
+        "Default: solana",
+    )
     parser.add_argument(
         "--min-liquidity-usd",
         type=float,
@@ -151,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lookback-seconds", type=int, default=3600, help="How much of our own polling history to keep per pair"
     )
-    parser.add_argument("--journal-dir", default="data/solana_journal")
+    parser.add_argument("--journal-dir", default="data/memecoin_journal")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -159,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     once.set_defaults(func=cmd_once)
 
     watch = subparsers.add_parser(
-        "watch", help="Continuously watch Solana memecoins and alert in real time"
+        "watch", help="Continuously watch memecoins and alert in real time"
     )
     watch.add_argument("--poll-seconds", type=int, default=30, help="Price/volume poll interval")
     watch.add_argument(

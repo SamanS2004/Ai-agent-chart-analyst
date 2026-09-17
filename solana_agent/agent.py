@@ -1,6 +1,7 @@
-"""Orchestrates discovery (which Solana tokens to watch) and polling (price/
-volume -> local tracking -> signal evaluation -> alert dispatch) into one
-real-time watch loop, plus a single-cycle `once` mode for testing/cron use."""
+"""Orchestrates discovery (which tokens to watch, on whichever chain is
+configured) and polling (price/volume -> local tracking -> signal
+evaluation -> alert dispatch) into one real-time watch loop, plus a
+single-cycle `once` mode for testing/cron use."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import time
 from typing import Callable
 
 from .discovery import (
+    SOLANA_CHAIN_ID,
     best_pair_per_token,
     discover_candidate_addresses,
     filter_established,
@@ -18,8 +20,6 @@ from .journal import SolanaJournal
 from .models import Alert, TrackedPair
 from .signals import SignalEngine
 from .tracker import PairTracker
-
-SOLANA_CHAIN_ID = "solana"
 
 
 class SolanaMemecoinAgent:

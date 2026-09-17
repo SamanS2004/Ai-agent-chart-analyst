@@ -5,10 +5,12 @@ Two independent agents live in this repo:
 - **FVG / Order Block agent for BTC** (below) — watches the BTC 15-minute
   chart during the 6-9am Pacific session for fair value gaps and order
   blocks.
-- **[Solana Memecoin Volume/Gain Tracker](#solana-memecoin-volumegain-tracker)**
-  — watches Solana memecoins in real time and alerts when volume picks up
-  alongside a 10-15%+ price gain. Jump to its section below, or run it
-  directly with `python run_solana_agent.py watch`.
+- **[Memecoin Volume/Gain Tracker](#memecoin-volumegain-tracker-solana--robinhood-chain)**
+  — watches well-established memecoins on Solana or Robinhood Chain in real
+  time and alerts when volume picks up alongside a 10-15%+ price gain. Jump
+  to its section below, or run it directly with
+  `python run_solana_agent.py watch` (add `--chain-id robinhood` for
+  Robinhood Chain).
 
 ## BTC FVG / Order Block agent
 
@@ -387,33 +389,53 @@ hand-built synthetic candles tend not to.
 
 ---
 
-# Solana Memecoin Volume/Gain Tracker
+# Memecoin Volume/Gain Tracker (Solana & Robinhood Chain)
 
-A separate agent (`solana_agent/`) that watches **well-established** Solana
-memecoins in real time and alerts the moment a token's volume picks up
-**and** its price has run up roughly 10-15% since the agent started
-watching it -- the classic early-pump shape, but only on coins that already
-have real liquidity and trading history. Freshly launched tokens are
-excluded by default (see "Staying away from new pairs" below) -- this
-agent is built for trading coins that are already established, not
-sniping brand-new listings.
+A separate agent (`solana_agent/`) that watches **well-established**
+memecoins on **Solana** or **Robinhood Chain** in real time and alerts the
+moment a token's volume picks up **and** its price has run up roughly
+10-15% since the agent started watching it -- the classic early-pump
+shape, but only on coins that already have real liquidity and trading
+history. Freshly launched tokens are excluded by default (see "Staying
+away from new pairs" below) -- this agent is built for trading coins that
+are already established, not sniping brand-new listings.
 
 **This is a monitoring tool, not a trading bot.** There are no wallet keys,
 no swap/transaction code, and no auto-buy path anywhere in this package --
-it only watches public market data and tells you about it. Solana
-memecoins are extremely high risk: most are unaudited, thinly traded, and a
-meaningful share are outright rug pulls or wash-traded to fake volume. A
-volume+price alert here is a "go look at this," not a signal to buy, and
-nothing in this repo should be treated as financial advice.
+it only watches public market data and tells you about it. Memecoins are
+extremely high risk on either chain: most are unaudited, thinly traded,
+and a meaningful share are outright rug pulls or wash-traded to fake
+volume. A volume+price alert here is a "go look at this," not a signal to
+buy, and nothing in this repo should be treated as financial advice.
+
+## Chains supported (`--chain-id`)
+
+| `--chain-id` | Chain | Where tokens trade |
+| --- | --- | --- |
+| `solana` (default) | Solana | Raydium, Orca, Meteora, pump.fun bonding curves (once graduated) |
+| `robinhood` | [Robinhood Chain](https://blog.arbitrum.io/robinhood-chain-mainnet/) (an Arbitrum Orbit L2, on-chain id 4663) | Uniswap-family pools -- Robinhood's own tokenized-stock tokens (e.g. stock/ETF tokens) as well as independently launched community/meme tokens |
+
+Everything else (discovery, liquidity/volume/age filtering, gain/volume
+tracking, signals, alerts) works identically on either chain -- it's all
+just DexScreener pair data keyed by `chain_id`, with no chain-specific
+logic anywhere in the pipeline. `--watch-addresses` takes whichever address
+format the selected chain uses (a base58 mint address on Solana, a `0x...`
+contract address on Robinhood Chain).
+
+Robinhood Chain launched its mainnet in mid-2026 and is much newer/smaller
+than Solana's memecoin scene -- if `watch`/`once` isn't finding anything
+there, try lowering `--min-liquidity-usd`, `--min-volume-h24-usd`, and/or
+`--min-pair-age-days` from their defaults (tuned against Solana's deeper
+market) to match what's actually available on-chain right now.
 
 ## Data source: DexScreener (free, no API key)
 
-Unlike the BTC agent, there's no single "the" price feed for a Solana
-memecoin -- each one trades on whatever DEX pool(s) it's listed on
-(Raydium, Orca, Meteora, a pump.fun bonding curve, ...). [DexScreener](https://docs.dexscreener.com/api/reference)
-indexes all of them and exposes it over a free, keyless REST API, which is
-what this agent uses for everything: discovering trending tokens and
-pulling each pair's live price/volume.
+Unlike the BTC agent, there's no single "the" price feed for a memecoin --
+each one trades on whatever DEX pool(s) it's listed on. [DexScreener](https://docs.dexscreener.com/api/reference)
+indexes pools across dozens of chains, Solana and Robinhood Chain included,
+and exposes it over a free, keyless REST API, which is what this agent
+uses for everything: discovering trending tokens and pulling each pair's
+live price/volume.
 
 ```
 GET https://api.dexscreener.com/latest/dex/tokens/{addresses}   # price/volume for known tokens
@@ -421,8 +443,8 @@ GET https://api.dexscreener.com/token-boosts/latest/v1          # trending/boost
 GET https://api.dexscreener.com/token-profiles/latest/v1        # newest submitted token profiles (discovery, opt-in)
 ```
 
-No wallet, no Solana RPC node, and no paid data provider needed. Like the
-Bybit-based BTC agent, this needs real outbound network access to
+No wallet, no RPC node, and no paid data provider needed for either chain.
+Like the Bybit-based BTC agent, this needs real outbound network access to
 `api.dexscreener.com`, which some sandboxed/CI environments block by
 policy -- run it somewhere with normal internet access if a request fails.
 
@@ -489,14 +511,16 @@ python run_solana_agent.py once
 Watch continuously and alert in real time (Ctrl+C to stop):
 
 ```bash
-python run_solana_agent.py watch
+python run_solana_agent.py watch                       # Solana (default)
+python run_solana_agent.py --chain-id robinhood watch   # Robinhood Chain
 ```
 
 Track specific tokens in addition to auto-discovered trending ones (comma
-separated Solana mint addresses):
+separated addresses, format matches the selected chain):
 
 ```bash
 python run_solana_agent.py --watch-addresses <mint1>,<mint2> watch
+python run_solana_agent.py --chain-id robinhood --watch-addresses 0xabc...,0xdef... watch
 ```
 
 Tune the thresholds:
@@ -506,17 +530,17 @@ python run_solana_agent.py --gain-min-pct 10 --gain-target-max-pct 15 --volume-m
 ```
 
 **Where alerts go:** always printed to the terminal (with a bell) and
-logged to `data/solana_journal/<YYYY-MM-DD>.jsonl`. Add
+logged to `data/memecoin_journal/<YYYY-MM-DD>.jsonl`. Add
 `--desktop-notify` for a best-effort native OS notification, or
 `--alert-webhook-url <url>` to POST each alert as JSON anywhere -- the
 same ntfy.sh trick from the BTC agent works here too:
 `--alert-webhook-url https://ntfy.sh/<your-topic>` (pipe through a small
 relay if you need it reshaped into ntfy's plain-text body).
 
-Common flags: `--min-liquidity-usd`, `--min-volume-h24-usd`,
-`--no-boosted` / `--no-profiles` (disable either discovery feed),
-`--journal-dir`, `--lookback-seconds` (how much local history to keep per
-pair).
+Common flags: `--chain-id`, `--min-liquidity-usd`, `--min-volume-h24-usd`,
+`--min-pair-age-days`, `--no-boosted` / `--include-new-listings` (toggle
+either discovery feed), `--journal-dir`, `--lookback-seconds` (how much
+local history to keep per pair).
 
 ## Project layout
 

@@ -1,6 +1,8 @@
 import time
 
 from solana_agent.discovery import (
+    ROBINHOOD_CHAIN_ID,
+    SOLANA_CHAIN_ID,
     best_pair_per_token,
     discover_candidate_addresses,
     discover_pairs,
@@ -18,9 +20,10 @@ def _pair(
     liquidity=10_000.0,
     volume_h24=5_000.0,
     pair_created_at_ms=ONE_YEAR_AGO_MS,
+    chain_id="solana",
 ):
     return TokenPair(
-        chain_id="solana",
+        chain_id=chain_id,
         dex_id="raydium",
         pair_address=pair_address,
         base_token_address=address,
@@ -72,6 +75,7 @@ class _FakeClient:
         self._profiles = profiles or []
         self._pairs = pairs or []
         self.requested_addresses = None
+        self.requested_chain_id = None
 
     def get_latest_boosted_tokens(self, chain_id="solana"):
         return self._boosted
@@ -84,6 +88,7 @@ class _FakeClient:
 
     def get_pairs_for_tokens(self, chain_id, addresses):
         self.requested_addresses = addresses
+        self.requested_chain_id = chain_id
         return self._pairs
 
 
@@ -141,6 +146,35 @@ def test_discover_pairs_returns_empty_without_resolving_when_no_candidates():
     client = _FakeClient()
     assert discover_pairs(client) == []
     assert client.requested_addresses is None
+
+
+def test_discover_pairs_works_for_robinhood_chain():
+    hood_pair = _pair(chain_id=ROBINHOOD_CHAIN_ID, address="0xToken1", pair_address="0xPair1")
+    client = _FakeClient(boosted=["0xToken1"], pairs=[hood_pair])
+
+    pairs = discover_pairs(
+        client,
+        chain_id=ROBINHOOD_CHAIN_ID,
+        min_liquidity_usd=1_000.0,
+        min_volume_h24_usd=1_000.0,
+    )
+
+    assert [p.pair_address for p in pairs] == ["0xPair1"]
+    assert pairs[0].chain_id == ROBINHOOD_CHAIN_ID
+
+
+def test_discover_pairs_passes_chain_id_through_to_client():
+    client = _FakeClient(boosted=["0xToken1"], pairs=[])
+
+    discover_pairs(client, chain_id=ROBINHOOD_CHAIN_ID)
+
+    assert client.requested_chain_id == ROBINHOOD_CHAIN_ID
+
+
+def test_solana_and_robinhood_chain_ids_are_distinct():
+    assert SOLANA_CHAIN_ID == "solana"
+    assert ROBINHOOD_CHAIN_ID == "robinhood"
+    assert SOLANA_CHAIN_ID != ROBINHOOD_CHAIN_ID
 
 
 def test_filter_established_drops_young_pairs():

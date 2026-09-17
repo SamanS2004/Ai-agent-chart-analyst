@@ -8,9 +8,10 @@ SignalEvent = Literal["price_gain", "volume_spike", "volume_and_gain", "new_pair
 
 @dataclass(frozen=True)
 class TokenPair:
-    """One DexScreener trading pair for a Solana memecoin (a token can have
-    several pairs across DEXes/pools -- discovery picks the highest-liquidity
-    one per token as canonical)."""
+    """One DexScreener trading pair for a memecoin on a supported chain
+    (Solana or Robinhood Chain -- see discovery.py). A token can have
+    several pairs across DEXes/pools; discovery picks the highest-liquidity
+    one per token as canonical."""
 
     chain_id: str
     dex_id: str
