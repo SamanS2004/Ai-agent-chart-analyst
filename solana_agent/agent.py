@@ -7,7 +7,12 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from .discovery import best_pair_per_token, discover_candidate_addresses, filter_investable
+from .discovery import (
+    best_pair_per_token,
+    discover_candidate_addresses,
+    filter_established,
+    filter_investable,
+)
 from .dexscreener_client import DexScreenerClient
 from .journal import SolanaJournal
 from .models import Alert, TrackedPair
@@ -26,10 +31,11 @@ class SolanaMemecoinAgent:
         journal: SolanaJournal,
         watchlist: list[str] | None = None,
         use_boosted: bool = True,
-        use_profiles: bool = True,
+        use_profiles: bool = False,
         chain_id: str = SOLANA_CHAIN_ID,
-        min_liquidity_usd: float = 5_000.0,
-        min_volume_h24_usd: float = 1_000.0,
+        min_liquidity_usd: float = 25_000.0,
+        min_volume_h24_usd: float = 20_000.0,
+        min_pair_age_days: float = 30.0,
     ) -> None:
         self.client = client
         self.tracker = tracker
@@ -41,6 +47,7 @@ class SolanaMemecoinAgent:
         self.chain_id = chain_id
         self.min_liquidity_usd = min_liquidity_usd
         self.min_volume_h24_usd = min_volume_h24_usd
+        self.min_pair_age_days = min_pair_age_days
 
     def refresh_candidates(self) -> list[str]:
         return discover_candidate_addresses(
@@ -63,6 +70,7 @@ class SolanaMemecoinAgent:
             min_liquidity_usd=self.min_liquidity_usd,
             min_volume_h24_usd=self.min_volume_h24_usd,
         )
+        pairs = filter_established(pairs, min_age_days=self.min_pair_age_days)
 
         now_ms = int(time.time() * 1000)
         current_addresses = {p.pair_address for p in pairs}

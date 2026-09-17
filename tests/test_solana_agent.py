@@ -1,11 +1,22 @@
+import time
+
 from solana_agent.agent import SolanaMemecoinAgent
 from solana_agent.journal import SolanaJournal
 from solana_agent.models import TokenPair
 from solana_agent.signals import SignalEngine, SignalThresholds
 from solana_agent.tracker import PairTracker
 
+ONE_YEAR_AGO_MS = int(time.time() * 1000) - 365 * 86_400_000
 
-def _pair(address="Token1", pair_address="Pair1", price=1.0, volume_m5=500.0, price_change_h1=12.0):
+
+def _pair(
+    address="Token1",
+    pair_address="Pair1",
+    price=1.0,
+    volume_m5=500.0,
+    price_change_h1=12.0,
+    pair_created_at_ms=ONE_YEAR_AGO_MS,
+):
     return TokenPair(
         chain_id="solana",
         dex_id="raydium",
@@ -24,7 +35,7 @@ def _pair(address="Token1", pair_address="Pair1", price=1.0, volume_m5=500.0, pr
         price_change_h1=price_change_h1,
         price_change_h6=0.0,
         price_change_h24=0.0,
-        pair_created_at_ms=None,
+        pair_created_at_ms=pair_created_at_ms,
         url="https://dexscreener.com/solana/pair1",
     )
 
@@ -105,3 +116,24 @@ def test_investability_filter_applies_before_tracking(tmp_path):
 
     assert tracked_list == []
     assert alerts == []
+
+
+def test_new_pair_is_excluded_by_default_even_if_otherwise_qualifying(tmp_path):
+    fresh = _pair(price_change_h1=12.0, volume_m5=500.0, pair_created_at_ms=int(time.time() * 1000))
+    agent = _agent([fresh], tmp_path)
+
+    tracked_list, alerts = agent.run_once()
+
+    assert tracked_list == []
+    assert alerts == []
+
+
+def test_new_pair_is_included_when_age_filter_disabled(tmp_path):
+    fresh = _pair(price_change_h1=12.0, volume_m5=500.0, pair_created_at_ms=int(time.time() * 1000))
+    agent = _agent([fresh], tmp_path)
+    agent.min_pair_age_days = 0
+
+    tracked_list, alerts = agent.run_once()
+
+    assert len(tracked_list) == 1
+    assert len(alerts) == 1

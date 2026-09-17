@@ -1,13 +1,24 @@
+import time
+
 from solana_agent.discovery import (
     best_pair_per_token,
     discover_candidate_addresses,
     discover_pairs,
+    filter_established,
     filter_investable,
 )
 from solana_agent.models import TokenPair
 
+ONE_YEAR_AGO_MS = int(time.time() * 1000) - 365 * 86_400_000
 
-def _pair(address="Token1", pair_address="Pair1", liquidity=10_000.0, volume_h24=5_000.0):
+
+def _pair(
+    address="Token1",
+    pair_address="Pair1",
+    liquidity=10_000.0,
+    volume_h24=5_000.0,
+    pair_created_at_ms=ONE_YEAR_AGO_MS,
+):
     return TokenPair(
         chain_id="solana",
         dex_id="raydium",
@@ -26,7 +37,7 @@ def _pair(address="Token1", pair_address="Pair1", liquidity=10_000.0, volume_h24
         price_change_h1=5.0,
         price_change_h6=10.0,
         price_change_h24=15.0,
-        pair_created_at_ms=None,
+        pair_created_at_ms=pair_created_at_ms,
         url="https://dexscreener.com/solana/pair1",
     )
 
@@ -83,7 +94,16 @@ def test_discover_candidate_addresses_puts_watchlist_first_and_dedupes():
 
     assert addresses[:2] == ["Watched", "W2"]
     assert addresses.count("B1") == 1
-    assert set(addresses) == {"Watched", "W2", "B1", "T1", "P1"}
+    # profiles (newest-listing feed) are off by default -- new pairs, on purpose
+    assert set(addresses) == {"Watched", "W2", "B1", "T1"}
+
+
+def test_discover_candidate_addresses_can_opt_into_new_listings_feed():
+    client = _FakeClient(boosted=["B1"], profiles=["P1"])
+
+    addresses = discover_candidate_addresses(client, use_profiles=True)
+
+    assert "P1" in addresses
 
 
 def test_discover_candidate_addresses_tolerates_feed_failures():
@@ -92,7 +112,7 @@ def test_discover_candidate_addresses_tolerates_feed_failures():
             raise RuntimeError("feed down")
 
     client = BrokenClient(profiles=["P1"])
-    addresses = discover_candidate_addresses(client, watchlist=["Watched"])
+    addresses = discover_candidate_addresses(client, watchlist=["Watched"], use_profiles=True)
 
     assert addresses == ["Watched", "P1"]
 
@@ -108,7 +128,36 @@ def test_discover_pairs_resolves_dedupes_and_filters():
     assert [p.pair_address for p in pairs] == ["HighLiq"]
 
 
+def test_discover_pairs_excludes_freshly_launched_tokens_by_default():
+    new_pair = _pair(pair_created_at_ms=int(time.time() * 1000))  # just launched
+    client = _FakeClient(boosted=["Token1"], pairs=[new_pair])
+
+    pairs = discover_pairs(client, min_liquidity_usd=1_000.0, min_volume_h24_usd=1_000.0)
+
+    assert pairs == []
+
+
 def test_discover_pairs_returns_empty_without_resolving_when_no_candidates():
     client = _FakeClient()
     assert discover_pairs(client) == []
     assert client.requested_addresses is None
+
+
+def test_filter_established_drops_young_pairs():
+    now_ms = int(time.time() * 1000)
+    young = _pair(pair_address="Young", pair_created_at_ms=now_ms - 5 * 86_400_000)  # 5 days old
+    old = _pair(pair_address="Old", pair_created_at_ms=now_ms - 60 * 86_400_000)  # 60 days old
+
+    kept = filter_established([young, old], min_age_days=30.0, now_ms=now_ms)
+
+    assert [p.pair_address for p in kept] == ["Old"]
+
+
+def test_filter_established_drops_unknown_age_as_untrusted():
+    unknown = _pair(pair_created_at_ms=None)
+    assert filter_established([unknown], min_age_days=30.0) == []
+
+
+def test_filter_established_disabled_when_min_age_is_zero():
+    unknown = _pair(pair_created_at_ms=None)
+    assert filter_established([unknown], min_age_days=0) == [unknown]

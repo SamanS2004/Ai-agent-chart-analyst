@@ -35,10 +35,11 @@ def _build_agent(args: argparse.Namespace) -> SolanaMemecoinAgent:
         journal=journal,
         watchlist=_parse_addresses(args.watch_addresses),
         use_boosted=not args.no_boosted,
-        use_profiles=not args.no_profiles,
+        use_profiles=args.include_new_listings,
         chain_id=args.chain_id,
         min_liquidity_usd=args.min_liquidity_usd,
         min_volume_h24_usd=args.min_volume_h24_usd,
+        min_pair_age_days=args.min_pair_age_days,
     )
 
 
@@ -82,11 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="solana-memecoin-agent",
         description=(
-            "Tracks Solana memecoins via DexScreener's free public API (no key needed) "
-            "and alerts in real time when a token's volume picks up alongside a "
-            "10-15%%+ price gain. Not financial advice; memecoins are extremely high "
-            "risk (rug pulls, thin liquidity) -- this only watches and alerts, it "
-            "never places trades."
+            "Tracks well-established Solana memecoins via DexScreener's free public API "
+            "(no key needed) and alerts in real time when a token's volume picks up "
+            "alongside a 10-15%%+ price gain. Freshly launched tokens are excluded by "
+            "default (see --min-pair-age-days) -- this is for coins that already have "
+            "real liquidity and volume, not new listings. Not financial advice; "
+            "memecoins are extremely high risk (rug pulls, thin liquidity) -- this only "
+            "watches and alerts, it never places trades."
         ),
     )
     parser.add_argument(
@@ -99,14 +102,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-boosted", action="store_true", help="Don't auto-discover via DexScreener's boosted-token feed"
     )
     parser.add_argument(
-        "--no-profiles", action="store_true", help="Don't auto-discover via DexScreener's newest-token-profile feed"
+        "--include-new-listings",
+        action="store_true",
+        help="Also auto-discover via DexScreener's newest-submitted-token-profile feed "
+        "(off by default: that feed is specifically brand-new listings)",
+    )
+    parser.add_argument(
+        "--min-pair-age-days",
+        type=float,
+        default=30.0,
+        help="Skip any pair younger than this (or with unknown age) -- the main 'stay away "
+        "from new pairs' control. 0 disables the age filter",
     )
     parser.add_argument("--chain-id", default="solana")
     parser.add_argument(
-        "--min-liquidity-usd", type=float, default=5_000.0, help="Skip pairs with less pool liquidity than this"
+        "--min-liquidity-usd",
+        type=float,
+        default=25_000.0,
+        help="Skip pairs with less pool liquidity than this (well-established coins have real liquidity)",
     )
     parser.add_argument(
-        "--min-volume-h24-usd", type=float, default=1_000.0, help="Skip pairs with less 24h volume than this"
+        "--min-volume-h24-usd",
+        type=float,
+        default=20_000.0,
+        help="Skip pairs with less 24h volume than this (well-established coins have real volume)",
     )
     parser.add_argument(
         "--gain-min-pct", type=float, default=10.0, help="Alert threshold: gain since we started watching (%%)"

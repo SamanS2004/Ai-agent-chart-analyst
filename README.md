@@ -389,10 +389,14 @@ hand-built synthetic candles tend not to.
 
 # Solana Memecoin Volume/Gain Tracker
 
-A separate agent (`solana_agent/`) that watches Solana memecoins in real
-time and alerts the moment a token's volume picks up **and** its price has
-run up roughly 10-15% since the agent started watching it -- the classic
-early-pump shape.
+A separate agent (`solana_agent/`) that watches **well-established** Solana
+memecoins in real time and alerts the moment a token's volume picks up
+**and** its price has run up roughly 10-15% since the agent started
+watching it -- the classic early-pump shape, but only on coins that already
+have real liquidity and trading history. Freshly launched tokens are
+excluded by default (see "Staying away from new pairs" below) -- this
+agent is built for trading coins that are already established, not
+sniping brand-new listings.
 
 **This is a monitoring tool, not a trading bot.** There are no wallet keys,
 no swap/transaction code, and no auto-buy path anywhere in this package --
@@ -414,7 +418,7 @@ pulling each pair's live price/volume.
 ```
 GET https://api.dexscreener.com/latest/dex/tokens/{addresses}   # price/volume for known tokens
 GET https://api.dexscreener.com/token-boosts/latest/v1          # trending/boosted tokens (discovery)
-GET https://api.dexscreener.com/token-profiles/latest/v1        # newest submitted token profiles (discovery)
+GET https://api.dexscreener.com/token-profiles/latest/v1        # newest submitted token profiles (discovery, opt-in)
 ```
 
 No wallet, no Solana RPC node, and no paid data provider needed. Like the
@@ -427,16 +431,30 @@ policy -- run it somewhere with normal internet access if a request fails.
 Every poll cycle, the agent's candidate list is:
 
 1. Any addresses you pass with `--watch-addresses` (always tracked).
-2. DexScreener's own "trending" feeds -- latest + top boosted tokens, and
-   the newest submitted token profiles -- refreshed every
-   `--discover-seconds` (default 300s) since those feeds have a lower rate
-   limit than the price/volume endpoint.
+2. DexScreener's "boosted tokens" feed (latest + top), refreshed every
+   `--discover-seconds` (default 300s) since discovery feeds have a lower
+   rate limit than the price/volume endpoint.
+
+The "newest submitted token profiles" feed is *not* used by default -- by
+definition it surfaces brand-new listings, which this agent avoids (pass
+`--include-new-listings` to opt in).
 
 Candidates are resolved to trading pairs, deduplicated to the
 highest-liquidity pool per token (a coin can list on several DEXes at
-once), and filtered to drop dust: `--min-liquidity-usd` (default $5,000)
-and `--min-volume-h24-usd` (default $1,000) screen out pairs too thin for
-a "gain" to mean anything.
+once), and filtered down to well-established coins: `--min-liquidity-usd`
+(default $25,000) and `--min-volume-h24-usd` (default $20,000) screen out
+pairs too thin for a "gain" to mean anything, on top of the pair-age filter
+below.
+
+## Staying away from new pairs
+
+This agent is meant for coins that already have an established market, not
+freshly launched tokens -- `--min-pair-age-days` (default **30**) drops any
+pair younger than that. A pair with no creation timestamp at all is
+dropped too rather than assumed established, since DexScreener not knowing
+a pool's age is itself a sign it's too new or too thin to trust. Set
+`--min-pair-age-days 0` to disable this filter if you do want to see new
+listings.
 
 ## How the gain/volume signal works (`tracker.py` / `signals.py`)
 
