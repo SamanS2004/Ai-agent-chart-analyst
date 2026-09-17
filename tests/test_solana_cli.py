@@ -37,3 +37,26 @@ def test_min_pair_age_days_defaults_to_30():
     parser = build_parser()
     args = parser.parse_args(["once"])
     assert args.min_pair_age_days == 30.0
+
+
+def test_exit_drawdown_pct_defaults_to_8():
+    parser = build_parser()
+    args = parser.parse_args(["once"])
+    assert args.exit_drawdown_pct == 8.0
+
+
+def test_app_subcommand_defaults():
+    parser = build_parser()
+    args = parser.parse_args(["app"])
+    assert args.command == "app"
+    assert args.host == "127.0.0.1"
+    assert args.port == 8090
+    assert args.poll_seconds == 30
+    assert args.discover_seconds == 300
+
+
+def test_app_subcommand_accepts_custom_host_and_port():
+    parser = build_parser()
+    args = parser.parse_args(["app", "--host", "0.0.0.0", "--port", "9090"])
+    assert args.host == "0.0.0.0"
+    assert args.port == 9090

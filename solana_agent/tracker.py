@@ -1,7 +1,8 @@
 """Turns a stream of TokenPair snapshots (one per poll) into a per-pair read
-on "how far has this run up since we started watching it, right now" and
-"is volume accelerating right now" -- the two ingredients signals.py combines
-into a volume+gain alert.
+on "how far has this run up since we started watching it, right now",
+"is volume accelerating right now", and "how far has it pulled back from
+its recent peak" -- the ingredients signals.py combines into entry
+(volume+gain) and exit (pullback) alerts.
 
 DexScreener's own priceChange.h1/volume.h1 fields are fixed rolling windows
 that don't know when *we* started watching a coin, so as soon as we have
@@ -68,6 +69,7 @@ class PairTracker:
 
         gain_pct, gain_basis = self._compute_gain(pair, history)
         volume_multiplier, volume_basis = self._compute_volume_multiplier(pair, history)
+        peak_price, drawdown_from_peak_pct = self._compute_drawdown(pair, history)
 
         return TrackedPair(
             pair=pair,
@@ -75,6 +77,8 @@ class PairTracker:
             gain_basis=gain_basis,
             volume_multiplier=volume_multiplier,
             volume_basis=volume_basis,
+            peak_price=peak_price,
+            drawdown_from_peak_pct=drawdown_from_peak_pct,
             first_seen_ms=first_seen_ms,
             last_updated_ms=now_ms,
         )
@@ -97,3 +101,14 @@ class PairTracker:
         if baseline_rate > 0:
             return min(pair.volume_m5 / baseline_rate, VOLUME_MULTIPLIER_CAP), "api_h1_rate"
         return (1.0 if pair.volume_m5 == 0 else VOLUME_MULTIPLIER_CAP), "api_h1_rate"
+
+    def _compute_drawdown(self, pair: TokenPair, history: deque[_Snapshot]) -> tuple[float, float]:
+        """Peak price is the highest price seen within the tracker's lookback
+        window (same window as _compute_gain's recent-low, so this is "recent
+        peak" rather than an unbounded all-time high) -- this is the exit-timing
+        counterpart to gain_pct's recent-low."""
+        peak_price = max(s.price_usd for s in history)
+        if peak_price <= 0:
+            return peak_price, 0.0
+        drawdown_pct = max(0.0, (peak_price - pair.price_usd) / peak_price * 100.0)
+        return peak_price, drawdown_pct

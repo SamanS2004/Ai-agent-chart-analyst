@@ -7,6 +7,7 @@ from .agent import SolanaMemecoinAgent, format_tracked
 from .alert_sinks import combine, console_sink, desktop_notification_sink, journal_sink, webhook_sink
 from .dexscreener_client import DexScreenerClient
 from .journal import SolanaJournal
+from .live_app import serve as serve_live_app
 from .signals import SignalEngine, SignalThresholds
 from .tracker import PairTracker
 
@@ -26,6 +27,7 @@ def _build_agent(args: argparse.Namespace) -> SolanaMemecoinAgent:
         gain_target_max_pct=args.gain_target_max_pct,
         volume_multiplier=args.volume_multiplier,
         reset_buffer_pct=args.reset_buffer_pct,
+        exit_drawdown_pct=args.exit_drawdown_pct,
     )
     engine = SignalEngine(thresholds)
     return SolanaMemecoinAgent(
@@ -76,6 +78,37 @@ def cmd_watch(args: argparse.Namespace) -> int:
         )
     except KeyboardInterrupt:
         print("\nStopped.")
+    return 0
+
+
+def cmd_app(args: argparse.Namespace) -> int:
+    agent = _build_agent(args)
+    url = f"http://{args.host}:{args.port}"
+
+    def announce_ready() -> None:
+        print(
+            f"Live dashboard for {args.chain_id} at {url} -- open it in your browser. "
+            "Ctrl+C to stop."
+        )
+
+    try:
+        serve_live_app(
+            agent,
+            host=args.host,
+            port=args.port,
+            poll_seconds=args.poll_seconds,
+            discover_seconds=args.discover_seconds,
+            on_ready=announce_ready,
+        )
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    except Exception as exc:
+        print(
+            f"Could not start the dashboard: {exc}\n"
+            "Most likely cause: no network access to api.dexscreener.com from this machine.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -158,6 +191,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Gain must fall this far below --gain-min-pct before a pair can alert again",
     )
     parser.add_argument(
+        "--exit-drawdown-pct",
+        type=float,
+        default=8.0,
+        help="Exit-alert threshold: after an entry has fired, a pullback this far below the "
+        "pair's recent peak (within --lookback-seconds) fires a 'pullback' alert -- the "
+        "timing signal for getting out",
+    )
+    parser.add_argument(
         "--lookback-seconds", type=int, default=3600, help="How much of our own polling history to keep per pair"
     )
     parser.add_argument("--journal-dir", default="data/memecoin_journal")
@@ -182,6 +223,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     watch.add_argument("--alert-webhook-secret", default=None)
     watch.set_defaults(func=cmd_watch)
+
+    app = subparsers.add_parser(
+        "app",
+        help="Serve a local live web dashboard: a sortable-by-eye table of tracked pairs "
+        "plus a live entry/exit alert feed, updating in real time",
+    )
+    app.add_argument("--host", default="127.0.0.1")
+    app.add_argument("--port", type=int, default=8090)
+    app.add_argument("--poll-seconds", type=int, default=30, help="Price/volume poll interval")
+    app.add_argument(
+        "--discover-seconds", type=int, default=300, help="How often to refresh the trending-token list"
+    )
+    app.set_defaults(func=cmd_app)
 
     return parser
 

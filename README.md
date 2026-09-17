@@ -478,7 +478,10 @@ a pool's age is itself a sign it's too new or too thin to trust. Set
 `--min-pair-age-days 0` to disable this filter if you do want to see new
 listings.
 
-## How the gain/volume signal works (`tracker.py` / `signals.py`)
+## Entry and exit signals (`tracker.py` / `signals.py`)
+
+This is the part built for "get in and out quick" -- the tool tracks both
+sides of a trade, not just the pump:
 
 - **Gain** is measured from the lowest price seen *since this agent started
   watching that pair*, not a fixed calendar window -- once at least 10
@@ -488,13 +491,23 @@ listings.
 - **Volume multiplier** compares the last 5 minutes of volume against that
   pair's own recent baseline rate (again falling back to
   `volume.h1 / 12` as an hourly average until enough local samples exist).
-- An alert fires once gain crosses `--gain-min-pct` (default 10%) *and*
-  the volume multiplier crosses `--volume-multiplier` (default 2.0x) --
-  the message also says whether it's within the 10-15% target zone or has
-  run further. Each pair then latches so it doesn't re-alert every poll
-  while it stays elevated; it re-arms only once its gain cools back down
-  by `--reset-buffer-pct` (default 5 points) below the threshold, so a
-  separate later pump still gets its own alert.
+- **Entry ("volume_and_gain")** fires once gain crosses `--gain-min-pct`
+  (default 10%) *and* the volume multiplier crosses `--volume-multiplier`
+  (default 2.0x) -- the message also says whether it's within the 10-15%
+  target zone or has run further. Each pair latches so it doesn't re-alert
+  every poll while it stays elevated; it re-arms only once its gain cools
+  back down by `--reset-buffer-pct` (default 5 points) below the threshold,
+  so a separate later pump still gets its own alert.
+- **Peak / drawdown**: alongside gain, the tracker keeps the highest price
+  seen for each pair (within `--lookback-seconds`) and how far the current
+  price has pulled back from it.
+- **Exit ("pullback")** fires once a pair that has already fired an entry
+  alert pulls back `--exit-drawdown-pct` (default 8%) from its recent
+  peak -- the moment this tool can actually help time getting out. It only
+  fires for pairs that already qualified for an entry (a coin that never
+  pumped just has normal noise, not an exit to time), latches the same way
+  as the entry alert, and resets together with it so a later, separate pump
+  can produce its own entry-then-exit pair of alerts.
 
 ## Usage
 
@@ -538,9 +551,48 @@ same ntfy.sh trick from the BTC agent works here too:
 relay if you need it reshaped into ntfy's plain-text body).
 
 Common flags: `--chain-id`, `--min-liquidity-usd`, `--min-volume-h24-usd`,
-`--min-pair-age-days`, `--no-boosted` / `--include-new-listings` (toggle
-either discovery feed), `--journal-dir`, `--lookback-seconds` (how much
-local history to keep per pair).
+`--min-pair-age-days`, `--exit-drawdown-pct`, `--no-boosted` /
+`--include-new-listings` (toggle either discovery feed), `--journal-dir`,
+`--lookback-seconds` (how much local history to keep per pair).
+
+## Live dashboard (`app` command)
+
+The `watch`/`once` commands are terminal-first; for actually *watching* the
+market while you're ready to act, there's a local live web dashboard built
+for scanning everything at a glance and reacting fast:
+
+```bash
+python run_solana_agent.py app                       # http://127.0.0.1:8090
+python run_solana_agent.py --chain-id robinhood app --port 9090
+```
+
+What it shows, updating in real time over Server-Sent Events (no manual
+refresh):
+
+- **A sortable-by-eye table** of every currently tracked pair -- symbol,
+  price, gain %, volume multiplier, and how far it's pulled back from its
+  recent peak -- sorted by gain, highest first, so the coins actually
+  moving right now are always at the top.
+- **Color-coded rows, not just numbers to read**: a green left-edge marks a
+  pair that currently qualifies as an entry (gain + volume both past
+  threshold, with a "TARGET" badge inside the 10-15% zone); an orange
+  left-edge and "EXIT" badge marks a pair that's pulled back past
+  `--exit-drawdown-pct` from its peak. You're meant to be able to tell
+  what's actionable without reading a single number.
+- **A live alert feed** of the same entry/exit events the terminal/webhook
+  sinks get, each with a one-click link to the pair's DexScreener page.
+- Every row's chart link goes straight to that pair's own DexScreener page
+  (many now have their own buy/swap widget built in) -- this dashboard
+  itself never touches a wallet or places an order. Speed to *decide* is
+  what it's built for; speed to *execute* still goes through your own
+  wallet (Phantom, etc. for Solana; your Robinhood Chain wallet of choice),
+  on your own terms.
+
+This is a local page served entirely from your own machine (same
+stdlib-HTTP-server-plus-SSE mechanism as the BTC agent's `app` command,
+see `trading_agent/live_app.py`) -- it needs real network access to
+`api.dexscreener.com`, same as `watch`/`once`. `--poll-seconds` and
+`--discover-seconds` work the same as on `watch`.
 
 ## Project layout
 
@@ -548,21 +600,24 @@ local history to keep per pair).
 solana_agent/
   models.py             TokenPair, TrackedPair, Alert dataclasses
   dexscreener_client.py public DexScreener REST client (search/tokens/boosts/profiles)
-  discovery.py          candidate-token discovery, dedup-to-highest-liquidity, dust filtering
-  tracker.py            per-pair rolling history -> local gain %% / volume multiplier
-  signals.py            threshold + latch/reset state machine -> Alert
+  discovery.py          candidate-token discovery, dedup-to-highest-liquidity, dust/age filtering
+  tracker.py            per-pair rolling history -> local gain %% / volume multiplier / peak-drawdown
+  signals.py            threshold + latch/reset state machine -> entry (volume_and_gain) / exit (pullback) Alerts
   journal.py            JSONL alert/event journal
-  alert_sinks.py         console/journal/desktop-notification/webhook delivery
+  alert_sinks.py        console/journal/desktop-notification/webhook delivery
   agent.py              orchestrates discovery + polling + tracking + signaling
-  cli.py                `once` / `watch` commands
+  live_app.py           local live web dashboard (real-time pair table + alert feed, SSE, stdlib HTTP server)
+  cli.py                `once` / `watch` / `app` commands
 ```
 
 ## Tests
 
 Same command as the BTC agent (`python -m pytest` runs both suites).
-`tests/test_solana_*.py` covers DexScreener response parsing, discovery
-dedup/filtering, local gain and volume-multiplier math (including the
-API-window fallback before enough local history exists), the alert
-latch/reset state machine, the journal, and the polling/pruning wiring in
-`agent.py` -- all against synthetic fixtures/fakes, so it runs with no
-network access.
+`tests/test_solana_*.py` covers DexScreener response parsing (both chains),
+discovery dedup/filtering (liquidity, volume, pair age), local gain,
+volume-multiplier, and peak/drawdown math (including the API-window
+fallback before enough local history exists), the entry/exit alert
+latch/reset state machine, the journal, the polling/pruning wiring in
+`agent.py`, the live dashboard's state/broadcast/HTTP layer, and CLI flag
+parsing -- all against synthetic fixtures/fakes, so it runs with no network
+access.

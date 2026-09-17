@@ -91,3 +91,41 @@ def test_forget_clears_history_so_next_update_restarts_baseline():
 
     assert tracked.gain_basis == "api_h1"
     assert tracked.gain_pct == 3.0
+
+
+def test_first_update_peak_is_current_price_with_no_drawdown():
+    tracker = PairTracker()
+    tracked = tracker.update(_pair(price=1.0), now_ms=0)
+
+    assert tracked.peak_price == 1.0
+    assert tracked.drawdown_from_peak_pct == 0.0
+
+
+def test_peak_tracks_the_highest_price_seen_and_drawdown_from_it():
+    tracker = PairTracker()
+    tracker.update(_pair(price=1.0), now_ms=0)
+    tracker.update(_pair(price=2.0), now_ms=60_000)  # new peak
+    tracked = tracker.update(_pair(price=1.8), now_ms=120_000)  # pulls back from the peak
+
+    assert tracked.peak_price == 2.0
+    assert round(tracked.drawdown_from_peak_pct, 2) == 10.0  # (2.0-1.8)/2.0 * 100
+
+
+def test_new_high_resets_drawdown_to_zero():
+    tracker = PairTracker()
+    tracker.update(_pair(price=1.0), now_ms=0)
+    tracker.update(_pair(price=0.9), now_ms=60_000)  # dip
+    tracked = tracker.update(_pair(price=1.5), now_ms=120_000)  # new high
+
+    assert tracked.peak_price == 1.5
+    assert tracked.drawdown_from_peak_pct == 0.0
+
+
+def test_peak_is_bounded_by_the_lookback_window():
+    tracker = PairTracker(lookback_seconds=60)
+    tracker.update(_pair(price=5.0), now_ms=0)  # an old spike
+    # far enough later that the old spike falls out of the 60s lookback window
+    tracked = tracker.update(_pair(price=1.0), now_ms=120_000)
+
+    assert tracked.peak_price == 1.0
+    assert tracked.drawdown_from_peak_pct == 0.0
