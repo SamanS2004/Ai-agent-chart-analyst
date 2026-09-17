@@ -6,7 +6,7 @@ definitions. They are not a reproduction of any proprietary indicator.
 
 from __future__ import annotations
 
-from .models import Candle, ConfluenceZone, FairValueGap, OrderBlock
+from .models import Candle, ConfluenceZone, FairValueGap, Kind, OrderBlock, TouchType
 
 
 def find_fair_value_gaps(candles: list[Candle]) -> list[FairValueGap]:
@@ -38,14 +38,25 @@ def find_fair_value_gaps(candles: list[Candle]) -> list[FairValueGap]:
     return gaps
 
 
+def _classify_touch(kind: Kind, top: float, bottom: float, candle: Candle) -> TouchType:
+    """The candle that first trades back into a zone either closes back
+    outside it (a retest -- the level held) or closes all the way through
+    to the far side (a disrespect -- the level broke)."""
+    if kind == "bullish":
+        return "retest" if candle.close >= bottom else "disrespect"
+    return "retest" if candle.close <= top else "disrespect"
+
+
 def _mark_fvg_mitigation(gaps: list[FairValueGap], candles: list[Candle]) -> None:
     for gap in gaps:
         for candle in candles[gap.index + 1 :]:
             if gap.kind == "bullish" and candle.low <= gap.top:
                 gap.mitigated = True
+                gap.mitigation_type = _classify_touch(gap.kind, gap.top, gap.bottom, candle)
                 break
             if gap.kind == "bearish" and candle.high >= gap.bottom:
                 gap.mitigated = True
+                gap.mitigation_type = _classify_touch(gap.kind, gap.top, gap.bottom, candle)
                 break
 
 
@@ -113,20 +124,44 @@ def _mark_ob_mitigation(blocks: list[OrderBlock], candles: list[Candle]) -> None
         for candle in candles[block.index + 1 :]:
             if block.kind == "bullish" and candle.low <= block.top:
                 block.mitigated = True
+                block.mitigation_type = _classify_touch(block.kind, block.top, block.bottom, candle)
                 break
             if block.kind == "bearish" and candle.high >= block.bottom:
                 block.mitigated = True
+                block.mitigation_type = _classify_touch(block.kind, block.top, block.bottom, candle)
                 break
+
+
+def fvg_is_tradeable(fvg: FairValueGap) -> bool:
+    """Both a clean retest and a disrespected (closed-straight-through)
+    touch are still valid FVG trade triggers -- the thesis for trading a
+    fair value gap is just that the inefficiency gets filled and reacted
+    to, and a violent overshoot through it doesn't undo that. An untouched
+    gap is tradeable on its first approach too, so this is unconditionally
+    true; it exists so that policy is one named, greppable decision rather
+    than an absent filter that reads like an oversight."""
+    return True
+
+
+def order_block_is_tradeable(block: OrderBlock) -> bool:
+    """An order block only gets a second look on a clean retest -- price
+    wicking into it and closing back out. A disrespected block (a candle
+    closing straight through it) means the level failed as structure and
+    is excluded for good, unlike a fair value gap. An untouched block is
+    tradeable on its first approach."""
+    return not block.mitigated or block.mitigation_type == "retest"
 
 
 def find_confluence_zones(
     fvgs: list[FairValueGap], order_blocks: list[OrderBlock]
 ) -> list[ConfluenceZone]:
-    """Unmitigated FVG + order block of the same bias whose ranges overlap."""
+    """Tradeable FVG + order block of the same bias whose ranges overlap
+    (see fvg_is_tradeable / order_block_is_tradeable for what "tradeable"
+    means for each)."""
     zones: list[ConfluenceZone] = []
     for kind in ("bullish", "bearish"):
-        live_fvgs = [f for f in fvgs if f.kind == kind and not f.mitigated]
-        live_obs = [o for o in order_blocks if o.kind == kind and not o.mitigated]
+        live_fvgs = [f for f in fvgs if f.kind == kind and fvg_is_tradeable(f)]
+        live_obs = [o for o in order_blocks if o.kind == kind and order_block_is_tradeable(o)]
         for fvg in live_fvgs:
             for ob in live_obs:
                 overlap_top = min(fvg.top, ob.top)

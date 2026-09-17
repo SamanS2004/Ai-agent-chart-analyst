@@ -1,4 +1,18 @@
-# AI Chart Analyst — FVG / Order Block agent for BTC
+# AI Chart Analyst
+
+Two independent agents live in this repo:
+
+- **FVG / Order Block agent for BTC** (below) — watches the BTC 15-minute
+  chart during the 6-9am Pacific session for fair value gaps and order
+  blocks.
+- **[Memecoin Volume/Gain Tracker](#memecoin-volumegain-tracker-solana--robinhood-chain)**
+  — watches well-established memecoins on Solana or Robinhood Chain in real
+  time and alerts when volume picks up alongside a 10-15%+ price gain. Jump
+  to its section below, or run it directly with
+  `python run_solana_agent.py watch` (add `--chain-id robinhood` for
+  Robinhood Chain).
+
+## BTC FVG / Order Block agent
 
 An agent that watches the BTC 15-minute chart during the 6:00-9:00am
 Pacific session, looks for **fair value gaps (FVGs)** and **order blocks
@@ -59,10 +73,15 @@ writing one small class with those same two methods — see
   opposite-colour candle before a break of market structure that also
   leaves a fair value gap immediately behind it — a same-direction swing
   break with no gap is not treated as a valid order block), tracking
-  whether each has since been mitigated (price traded back through it).
-- When price is approaching an unmitigated zone, it computes a trade idea:
+  whether each has since been mitigated (price traded back through it) and,
+  if so, whether that touch was a retest or a disrespect — see "Retests vs.
+  disrespects" below for what that changes.
+- When price is approaching a tradeable zone, it computes a trade idea:
   entry at the zone edge, stop beyond the zone, targets at 2R/3R, plus a
   plain-English rationale.
+- FVGs that formed back to back during one strong push are treated as one
+  continuous imbalance, not separate opportunities — see "Stacked FVGs"
+  below for how the single priority zone is chosen.
 - Writes everything to a daily JSONL journal under `data/journal/`.
 - **It does not place real orders.** There are no exchange API keys, no
   order-execution code, and no live-trading path in this repo. It's an
@@ -74,6 +93,60 @@ writing one small class with those same two methods — see
 - This is not financial advice; FVG/order-block heuristics are a
   simplified, from-scratch interpretation of common ICT-style concepts,
   not a guaranteed-profitable strategy.
+
+## Stacked FVGs (`stacking.py`)
+
+When several FVGs form back to back during one strong push, they're grouped
+into one stack and only a single zone from it is ever offered as a trade
+idea — never every gap in the stack independently. Priority within a stack:
+
+1. **Discount/premium (hard filter).** A bullish FVG only counts if its
+   midpoint sits in the lower half of the recent candle range (discount); a
+   bearish one only in the upper half (premium). Fails this → dropped
+   entirely, even if otherwise valid.
+2. **Structurally nearest gap first.** The last gap formed during the push
+   (highest top for a bullish stack, lowest bottom for a bearish one) is
+   the first one price reaches on a retracement — that's the one to react
+   at. If price has already traded through it, **the whole stack is
+   disqualified that cycle**, not just that one gap — since each analysis
+   cycle recomputes from scratch with no memory of "already tried and
+   failed," this is what actually stops the tool from chasing a "better"
+   fill deeper in the stack once the front of it has already failed.
+3. **Order-block confluence beats plain imbalance**, but only among gaps
+   still live per (2): if one of them overlaps a valid order block, that
+   nearest *confluence* gap is nominated instead of the plain nearest one.
+
+A gap's width relative to others in the same stack is reported (used in
+the rationale, e.g. "the widest one in it") rather than used to override
+the nearest-price pick — once discount/premium and confluence have already
+picked a winner, folding in a third, differently-scaled criterion (price
+distance vs. gap width) would make the result depend on arbitrary
+weighting between them.
+
+## Retests vs. disrespects (`smc.fvg_is_tradeable` / `smc.order_block_is_tradeable`)
+
+The first candle that trades back into a zone is classified by how it left:
+
+- **Retest** — it wicked into the zone and closed back out, respecting the
+  level.
+- **Disrespect** — it closed all the way through to the far side, breaking
+  the level.
+
+The two zone types treat that differently:
+
+- **Fair value gaps are tradeable on either one.** The thesis for an FVG
+  trade is that the inefficiency gets filled and reacted to — a clean
+  retest and a disrespect-then-reversal both satisfy that, so a touched FVG
+  stays a candidate, not just an untouched one.
+- **Order blocks are only tradeable on a retest.** A disrespected order
+  block — price closing straight through it — means that level failed as
+  real structure and it's excluded for good; an untouched or once-retested
+  block stays live.
+
+This is a strictly geometric, close-price check (see `_classify_touch` in
+`smc.py`), computed the moment a zone is first touched — it doesn't track
+how many times a level has been retested since, just what the first touch
+did.
 
 ## Setup
 
@@ -285,7 +358,8 @@ trading_agent/
   bybit_client.py      public Bybit v5 kline/ticker fetcher (default data source)
   twelvedata_client.py Twelve Data REST kline/ticker fetcher (alternative data source)
   smc.py          FVG / order block / confluence-zone detection
-  strategy.py     turns detected zones into a single trade idea
+  stacking.py     groups back-to-back same-direction FVGs, picks the one priority zone
+  strategy.py     turns detected/stacked zones into a single trade idea
   alerts.py       touch/retest/disrespect state machine + proximity filtering
   live_stream.py  Bybit public WebSocket ticker feed
   alert_sinks.py  console/journal/desktop-notification/webhook delivery
@@ -312,3 +386,238 @@ from a real BTC/USD 15m feed, validated against the detection pipeline and
 spot-checked candle-by-candle against each zone's own definition -- this
 catches edge cases (real precision, real volatility clustering) that
 hand-built synthetic candles tend not to.
+
+---
+
+# Memecoin Volume/Gain Tracker (Solana & Robinhood Chain)
+
+A separate agent (`solana_agent/`) that watches **well-established**
+memecoins on **Solana** or **Robinhood Chain** in real time and alerts the
+moment a token's volume picks up **and** its price has run up roughly
+10-15% since the agent started watching it -- the classic early-pump
+shape, but only on coins that already have real liquidity and trading
+history. Freshly launched tokens are excluded by default (see "Staying
+away from new pairs" below) -- this agent is built for trading coins that
+are already established, not sniping brand-new listings.
+
+**This is a monitoring tool, not a trading bot.** There are no wallet keys,
+no swap/transaction code, and no auto-buy path anywhere in this package --
+it only watches public market data and tells you about it. Memecoins are
+extremely high risk on either chain: most are unaudited, thinly traded,
+and a meaningful share are outright rug pulls or wash-traded to fake
+volume. A volume+price alert here is a "go look at this," not a signal to
+buy, and nothing in this repo should be treated as financial advice.
+
+## Chains supported (`--chain-id`)
+
+| `--chain-id` | Chain | Where tokens trade |
+| --- | --- | --- |
+| `solana` (default) | Solana | Raydium, Orca, Meteora, pump.fun bonding curves (once graduated) |
+| `robinhood` | [Robinhood Chain](https://blog.arbitrum.io/robinhood-chain-mainnet/) (an Arbitrum Orbit L2, on-chain id 4663) | Uniswap-family pools -- Robinhood's own tokenized-stock tokens (e.g. stock/ETF tokens) as well as independently launched community/meme tokens |
+
+Everything else (discovery, liquidity/volume/age filtering, gain/volume
+tracking, signals, alerts) works identically on either chain -- it's all
+just DexScreener pair data keyed by `chain_id`, with no chain-specific
+logic anywhere in the pipeline. `--watch-addresses` takes whichever address
+format the selected chain uses (a base58 mint address on Solana, a `0x...`
+contract address on Robinhood Chain).
+
+Robinhood Chain launched its mainnet in mid-2026 and is much newer/smaller
+than Solana's memecoin scene -- if `watch`/`once` isn't finding anything
+there, try lowering `--min-liquidity-usd`, `--min-volume-h24-usd`, and/or
+`--min-pair-age-days` from their defaults (tuned against Solana's deeper
+market) to match what's actually available on-chain right now.
+
+## Data source: DexScreener (free, no API key)
+
+Unlike the BTC agent, there's no single "the" price feed for a memecoin --
+each one trades on whatever DEX pool(s) it's listed on. [DexScreener](https://docs.dexscreener.com/api/reference)
+indexes pools across dozens of chains, Solana and Robinhood Chain included,
+and exposes it over a free, keyless REST API, which is what this agent
+uses for everything: discovering trending tokens and pulling each pair's
+live price/volume.
+
+```
+GET https://api.dexscreener.com/latest/dex/tokens/{addresses}   # price/volume for known tokens
+GET https://api.dexscreener.com/token-boosts/latest/v1          # trending/boosted tokens (discovery)
+GET https://api.dexscreener.com/token-profiles/latest/v1        # newest submitted token profiles (discovery, opt-in)
+```
+
+No wallet, no RPC node, and no paid data provider needed for either chain.
+Like the Bybit-based BTC agent, this needs real outbound network access to
+`api.dexscreener.com`, which some sandboxed/CI environments block by
+policy -- run it somewhere with normal internet access if a request fails.
+
+## How it decides what to watch
+
+Every poll cycle, the agent's candidate list is:
+
+1. Any addresses you pass with `--watch-addresses` (always tracked).
+2. DexScreener's "boosted tokens" feed (latest + top), refreshed every
+   `--discover-seconds` (default 300s) since discovery feeds have a lower
+   rate limit than the price/volume endpoint.
+
+The "newest submitted token profiles" feed is *not* used by default -- by
+definition it surfaces brand-new listings, which this agent avoids (pass
+`--include-new-listings` to opt in).
+
+Candidates are resolved to trading pairs, deduplicated to the
+highest-liquidity pool per token (a coin can list on several DEXes at
+once), and filtered down to well-established coins: `--min-liquidity-usd`
+(default $25,000) and `--min-volume-h24-usd` (default $20,000) screen out
+pairs too thin for a "gain" to mean anything, on top of the pair-age filter
+below.
+
+## Staying away from new pairs
+
+This agent is meant for coins that already have an established market, not
+freshly launched tokens -- `--min-pair-age-days` (default **30**) drops any
+pair younger than that. A pair with no creation timestamp at all is
+dropped too rather than assumed established, since DexScreener not knowing
+a pool's age is itself a sign it's too new or too thin to trust. Set
+`--min-pair-age-days 0` to disable this filter if you do want to see new
+listings.
+
+## Entry and exit signals (`tracker.py` / `signals.py`)
+
+This is the part built for "get in and out quick" -- the tool tracks both
+sides of a trade, not just the pump:
+
+- **Gain** is measured from the lowest price seen *since this agent started
+  watching that pair*, not a fixed calendar window -- once at least 10
+  minutes of local history exists, `(current - recent_low) / recent_low`
+  replaces DexScreener's own `priceChange.h1` figure, which is used as a
+  same-cycle estimate before that.
+- **Volume multiplier** compares the last 5 minutes of volume against that
+  pair's own recent baseline rate (again falling back to
+  `volume.h1 / 12` as an hourly average until enough local samples exist).
+- **Entry ("volume_and_gain")** fires once gain crosses `--gain-min-pct`
+  (default 10%) *and* the volume multiplier crosses `--volume-multiplier`
+  (default 2.0x) -- the message also says whether it's within the 10-15%
+  target zone or has run further. Each pair latches so it doesn't re-alert
+  every poll while it stays elevated; it re-arms only once its gain cools
+  back down by `--reset-buffer-pct` (default 5 points) below the threshold,
+  so a separate later pump still gets its own alert.
+- **Peak / drawdown**: alongside gain, the tracker keeps the highest price
+  seen for each pair (within `--lookback-seconds`) and how far the current
+  price has pulled back from it.
+- **Exit ("pullback")** fires once a pair that has already fired an entry
+  alert pulls back `--exit-drawdown-pct` (default 8%) from its recent
+  peak -- the moment this tool can actually help time getting out. It only
+  fires for pairs that already qualified for an entry (a coin that never
+  pumped just has normal noise, not an exit to time), latches the same way
+  as the entry alert, and resets together with it so a later, separate pump
+  can produce its own entry-then-exit pair of alerts.
+
+## Usage
+
+```bash
+pip install -r requirements.txt
+```
+
+Run one discover+poll cycle right now and print what's being tracked:
+
+```bash
+python run_solana_agent.py once
+```
+
+Watch continuously and alert in real time (Ctrl+C to stop):
+
+```bash
+python run_solana_agent.py watch                       # Solana (default)
+python run_solana_agent.py --chain-id robinhood watch   # Robinhood Chain
+```
+
+Track specific tokens in addition to auto-discovered trending ones (comma
+separated addresses, format matches the selected chain):
+
+```bash
+python run_solana_agent.py --watch-addresses <mint1>,<mint2> watch
+python run_solana_agent.py --chain-id robinhood --watch-addresses 0xabc...,0xdef... watch
+```
+
+Tune the thresholds:
+
+```bash
+python run_solana_agent.py --gain-min-pct 10 --gain-target-max-pct 15 --volume-multiplier 2.5 watch
+```
+
+**Where alerts go:** always printed to the terminal (with a bell) and
+logged to `data/memecoin_journal/<YYYY-MM-DD>.jsonl`. Add
+`--desktop-notify` for a best-effort native OS notification, or
+`--alert-webhook-url <url>` to POST each alert as JSON anywhere -- the
+same ntfy.sh trick from the BTC agent works here too:
+`--alert-webhook-url https://ntfy.sh/<your-topic>` (pipe through a small
+relay if you need it reshaped into ntfy's plain-text body).
+
+Common flags: `--chain-id`, `--min-liquidity-usd`, `--min-volume-h24-usd`,
+`--min-pair-age-days`, `--exit-drawdown-pct`, `--no-boosted` /
+`--include-new-listings` (toggle either discovery feed), `--journal-dir`,
+`--lookback-seconds` (how much local history to keep per pair).
+
+## Live dashboard (`app` command)
+
+The `watch`/`once` commands are terminal-first; for actually *watching* the
+market while you're ready to act, there's a local live web dashboard built
+for scanning everything at a glance and reacting fast:
+
+```bash
+python run_solana_agent.py app                       # http://127.0.0.1:8090
+python run_solana_agent.py --chain-id robinhood app --port 9090
+```
+
+What it shows, updating in real time over Server-Sent Events (no manual
+refresh):
+
+- **A sortable-by-eye table** of every currently tracked pair -- symbol,
+  price, gain %, volume multiplier, and how far it's pulled back from its
+  recent peak -- sorted by gain, highest first, so the coins actually
+  moving right now are always at the top.
+- **Color-coded rows, not just numbers to read**: a green left-edge marks a
+  pair that currently qualifies as an entry (gain + volume both past
+  threshold, with a "TARGET" badge inside the 10-15% zone); an orange
+  left-edge and "EXIT" badge marks a pair that's pulled back past
+  `--exit-drawdown-pct` from its peak. You're meant to be able to tell
+  what's actionable without reading a single number.
+- **A live alert feed** of the same entry/exit events the terminal/webhook
+  sinks get, each with a one-click link to the pair's DexScreener page.
+- Every row's chart link goes straight to that pair's own DexScreener page
+  (many now have their own buy/swap widget built in) -- this dashboard
+  itself never touches a wallet or places an order. Speed to *decide* is
+  what it's built for; speed to *execute* still goes through your own
+  wallet (Phantom, etc. for Solana; your Robinhood Chain wallet of choice),
+  on your own terms.
+
+This is a local page served entirely from your own machine (same
+stdlib-HTTP-server-plus-SSE mechanism as the BTC agent's `app` command,
+see `trading_agent/live_app.py`) -- it needs real network access to
+`api.dexscreener.com`, same as `watch`/`once`. `--poll-seconds` and
+`--discover-seconds` work the same as on `watch`.
+
+## Project layout
+
+```
+solana_agent/
+  models.py             TokenPair, TrackedPair, Alert dataclasses
+  dexscreener_client.py public DexScreener REST client (search/tokens/boosts/profiles)
+  discovery.py          candidate-token discovery, dedup-to-highest-liquidity, dust/age filtering
+  tracker.py            per-pair rolling history -> local gain %% / volume multiplier / peak-drawdown
+  signals.py            threshold + latch/reset state machine -> entry (volume_and_gain) / exit (pullback) Alerts
+  journal.py            JSONL alert/event journal
+  alert_sinks.py        console/journal/desktop-notification/webhook delivery
+  agent.py              orchestrates discovery + polling + tracking + signaling
+  live_app.py           local live web dashboard (real-time pair table + alert feed, SSE, stdlib HTTP server)
+  cli.py                `once` / `watch` / `app` commands
+```
+
+## Tests
+
+Same command as the BTC agent (`python -m pytest` runs both suites).
+`tests/test_solana_*.py` covers DexScreener response parsing (both chains),
+discovery dedup/filtering (liquidity, volume, pair age), local gain,
+volume-multiplier, and peak/drawdown math (including the API-window
+fallback before enough local history exists), the entry/exit alert
+latch/reset state machine, the journal, the polling/pruning wiring in
+`agent.py`, the live dashboard's state/broadcast/HTTP layer, and CLI flag
+parsing -- all against synthetic fixtures/fakes, so it runs with no network
+access.

@@ -104,7 +104,14 @@ def test_counts_are_stable_snapshot():
     order_blocks dropped from 13 to 5 when find_order_blocks started
     requiring a confirming fair-value-gap behind each candidate order block
     (an order block with no imbalance behind it is not treated as valid) --
-    the other 8 were exactly that kind of false positive."""
+    the other 8 were exactly that kind of false positive.
+
+    zones jumped from 0 to 20 when confluence stopped requiring both sides
+    to be untouched: FVGs are tradeable on a retest or a disrespect (not
+    just their first approach), and an order block survives a retest too
+    -- only a disrespected order block is excluded for good. All 5 order
+    blocks in this dataset happen to have been retested (0 disrespected),
+    so every one of them still pairs up with a touched FVG on this data."""
     candles = _load_candles()
     fvgs = find_fair_value_gaps(candles)
     order_blocks = find_order_blocks(candles)
@@ -114,4 +121,5 @@ def test_counts_are_stable_snapshot():
     assert sum(not f.mitigated for f in fvgs) == 13
     assert len(order_blocks) == 5
     assert sum(not o.mitigated for o in order_blocks) == 0
-    assert len(zones) == 0
+    assert sum(o.mitigation_type == "retest" for o in order_blocks) == 5
+    assert len(zones) == 20
